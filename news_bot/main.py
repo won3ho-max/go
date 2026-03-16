@@ -12,7 +12,6 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(os.path.join(os.path.dirname(__file__), 'bot.log'), encoding='utf-8'),
     ]
 )
 logger = logging.getLogger(__name__)
