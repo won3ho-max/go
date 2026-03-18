@@ -85,11 +85,11 @@ def is_relevant(title, summary=''):
     # 1단계: 농협 관련 기사인지 확인
     if not any(kw in text for kw in KEYWORDS):
         return False
-    # 2단계: 비위·부정 키워드가 반드시 제목에 있어야 함
-    # (요약에만 있으면 홍보성 기사 오탐이 많아 제목 한정으로 강화)
-    if not any(kw in title for kw in CRITICAL_KEYWORDS):
+    # 2단계: 비위·부정 키워드가 제목 또는 요약에 있어야 함
+    if not any(kw in text for kw in CRITICAL_KEYWORDS):
         return False
-    # 3단계: 제목이 홍보성 키워드로만 이루어진 경우 제외
+    # 3단계: 제목이 홍보성이고 제목에 비위 키워드가 없으면 제외
+    # (요약에만 비위 단어가 있는 홍보성 기사 차단)
     if any(kw in title for kw in PROMO_KEYWORDS) and not any(kw in title for kw in CRITICAL_KEYWORDS):
         return False
     return True
