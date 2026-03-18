@@ -10,23 +10,23 @@ logger = logging.getLogger(__name__)
 
 KEYWORDS = ['농협', 'NH농협', '농협은행', '농협중앙회', '농협금융', '농협생명', '농협손해보험', '농협카드']
 
-# 비위·부정·재무 위험 관련 핵심 키워드 — 이 중 하나라도 포함되어야 알림 발송
+# 비위·부정·재무 위험 관련 핵심 키워드 — 반드시 제목에 있어야 알림 발송
 CRITICAL_KEYWORDS = [
     # 비위·범죄·수사
     '비위', '비리', '횡령', '배임', '사기', '부정', '부패', '불법', '탈세', '뇌물',
     '수사', '기소', '검찰', '경찰', '감사원', '금감원', '금융감독원', '압수수색',
     '고소', '고발', '소송', '재판', '유죄', '혐의', '피의자', '구속', '체포',
-    # 징계·인사 문제
-    '징계', '해임', '파면', '정직', '강등', '경고', '경질', '낙하산', '관치',
+    # 징계·인사
+    '징계', '해임', '파면', '정직', '강등', '경질', '낙하산', '관치',
     # 재무·경영 리스크
     '손실', '적자', '부실', '부채', '결손', '파산', '부도', '위기', '리스크',
-    '손해', '피해', '배상', '과징금', '과태료', '제재', '영업정지',
+    '과징금', '과태료', '제재', '영업정지',
     # 갈등·논란
-    '논란', '갈등', '반발', '항의', '파업', '노조', '임금체불', '고통', '피해',
-    '사고', '사망', '부상', '실태', '문제', '의혹', '의문', '폭로', '내부고발',
+    '논란', '갈등', '반발', '항의', '파업', '노조', '임금체불',
+    '의혹', '폭로', '내부고발',
 ]
 
-# 단순 홍보성 기사를 걸러내는 키워드 — 단독으로 존재하면 제외
+# 단순 홍보성 기사를 걸러내는 키워드
 PROMO_KEYWORDS = [
     '출시', '론칭', '오픈', '이벤트', '캠페인', '프로모션', '할인', '혜택',
     '기부', '봉사', '협약', 'MOU', '업무협약', '사회공헌', 'CSR',
@@ -35,9 +35,28 @@ PROMO_KEYWORDS = [
 ]
 
 RSS_FEEDS = [
+    # Google 뉴스 (농협 검색)
     "https://news.google.com/rss/search?q=농협&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=NH농협은행&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=농협중앙회&hl=ko&gl=KR&ceid=KR:ko",
+    # 연합뉴스
+    "https://www.yna.co.kr/rss/economy.xml",
+    "https://www.yna.co.kr/rss/society.xml",
+    "https://www.yna.co.kr/rss/industry.xml",
+    # 뉴시스
+    "https://www.newsis.com/RSS/economy.xml",
+    "https://www.newsis.com/RSS/bank.xml",
+    # 매일경제
+    "https://www.mk.co.kr/rss/30100041/",
+    # 머니투데이
+    "https://rss.mt.co.kr/mt_news.xml",
+    # 파이낸셜뉴스
+    "https://www.fnnews.com/rss/r20/fn_realnews_economy.xml",
+    "https://www.fnnews.com/rss/r20/fn_realnews_finance.xml",
+    # 서울경제
+    "https://www.sedaily.com/rss/finance",
+    # 아시아경제
+    "https://www.asiae.co.kr/rss/economy.htm",
 ]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -66,13 +85,12 @@ def is_relevant(title, summary=''):
     # 1단계: 농협 관련 기사인지 확인
     if not any(kw in text for kw in KEYWORDS):
         return False
-    # 2단계: 비위·부정·재무 위험 키워드가 하나라도 있어야 함
-    if not any(kw in text for kw in CRITICAL_KEYWORDS):
+    # 2단계: 비위·부정 키워드가 반드시 제목에 있어야 함
+    # (요약에만 있으면 홍보성 기사 오탐이 많아 제목 한정으로 강화)
+    if not any(kw in title for kw in CRITICAL_KEYWORDS):
         return False
-    # 3단계: 홍보성 키워드만 있고 비위 키워드가 없으면 제외
-    has_promo = any(kw in text for kw in PROMO_KEYWORDS)
-    has_critical = any(kw in text for kw in CRITICAL_KEYWORDS)
-    if has_promo and not has_critical:
+    # 3단계: 제목이 홍보성 키워드로만 이루어진 경우 제외
+    if any(kw in title for kw in PROMO_KEYWORDS) and not any(kw in title for kw in CRITICAL_KEYWORDS):
         return False
     return True
 
@@ -90,9 +108,12 @@ def fetch_new_articles():
                 summary = entry.get('summary', '').strip()
                 published = entry.get('published', '')
 
+                # source: Google 뉴스는 entry.source.title, 언론사 직접 피드는 feed.feed.title
                 source = ''
                 if hasattr(entry, 'source') and hasattr(entry.source, 'title'):
                     source = entry.source.title
+                elif hasattr(feed, 'feed') and hasattr(feed.feed, 'title'):
+                    source = feed.feed.title
 
                 if not title or not url:
                     continue
