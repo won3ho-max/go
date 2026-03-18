@@ -1,9 +1,14 @@
 import os
 import logging
+from datetime import time
+from zoneinfo import ZoneInfo
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 from collector import fetch_new_articles, format_article
+
+KST = ZoneInfo('Asia/Seoul')
 
 load_dotenv()
 
@@ -56,7 +61,21 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def heartbeat(context):
+    try:
+        await context.bot.send_message(
+            chat_id=CHAT_ID,
+            text="✅ 정상 작동 중입니다",
+        )
+    except Exception as e:
+        logger.error(f"하트비트 전송 오류: {e}")
+
+
 async def scheduled_check(context):
+    # 수면시간(22:00~06:00 KST) 제외
+    hour = datetime.now(KST).hour
+    if hour >= 22 or hour < 6:
+        return
     try:
         articles = fetch_new_articles()
         if not articles:
@@ -92,6 +111,12 @@ def main():
         interval=CHECK_INTERVAL * 60,
         first=10
     )
+
+    for hour in [9, 12, 15, 20]:
+        app.job_queue.run_daily(
+            heartbeat,
+            time=time(hour, 0, 0, tzinfo=KST),
+        )
 
     logger.info(f"봇 시작 - {CHECK_INTERVAL}분마다 농협 뉴스 모니터링")
     app.run_polling()
