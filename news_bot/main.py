@@ -1,14 +1,29 @@
 import os
+import json
 import logging
-from datetime import time
+from datetime import time, datetime
 from zoneinfo import ZoneInfo
-from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 from collector import fetch_new_articles, format_article
 
 KST = ZoneInfo('Asia/Seoul')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PENDING_FILE = os.path.join(BASE_DIR, 'pending_articles.json')
+
+
+def load_pending():
+    if os.path.exists(PENDING_FILE):
+        with open(PENDING_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+
+def save_pending(articles):
+    with open(PENDING_FILE, 'w', encoding='utf-8') as f:
+        json.dump(articles, f, ensure_ascii=False)
+
 
 load_dotenv()
 
@@ -71,14 +86,43 @@ async def heartbeat(context):
         logger.error(f"하트비트 전송 오류: {e}")
 
 
-async def scheduled_check(context):
-    # 수면시간(22:00~06:00 KST) 제외
-    hour = datetime.now(KST).hour
-    if hour >= 22 or hour < 6:
+async def send_pending(context):
+    """06:00 KST — 수면시간 동안 쌓인 기사 일괄 발송"""
+    pending = load_pending()
+    if not pending:
         return
+    save_pending([])
+    try:
+        await context.bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"🌅 <b>수면시간 동안 수집된 뉴스 {len(pending)}건</b>",
+            parse_mode='HTML',
+        )
+    except Exception as e:
+        logger.error(f"pending 헤더 전송 오류: {e}")
+    for article in pending:
+        try:
+            await context.bot.send_message(
+                chat_id=CHAT_ID,
+                text=format_article(article),
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            logger.error(f"pending 기사 전송 오류: {e}")
+
+
+async def scheduled_check(context):
+    hour = datetime.now(KST).hour
     try:
         articles = fetch_new_articles()
         if not articles:
+            return
+        # 수면시간(22:00~06:00 KST): 큐에 저장
+        if hour >= 22 or hour < 6:
+            pending = load_pending()
+            pending.extend(articles)
+            save_pending(pending)
             return
         for article in articles[:10]:
             try:
@@ -117,6 +161,11 @@ def main():
             heartbeat,
             time=time(hour, 0, 0, tzinfo=KST),
         )
+
+    app.job_queue.run_daily(
+        send_pending,
+        time=time(6, 0, 0, tzinfo=KST),
+    )
 
     logger.info(f"봇 시작 - {CHECK_INTERVAL}분마다 농협 뉴스 모니터링")
     app.run_polling()
