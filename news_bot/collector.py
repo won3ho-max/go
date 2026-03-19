@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,7 @@ def is_relevant(title, summary=''):
 def fetch_new_articles():
     seen = load_seen()
     new_articles = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
     for feed_url in RSS_FEEDS:
         try:
@@ -100,6 +101,13 @@ def fetch_new_articles():
                 url = entry.get('link', '').strip()
                 summary = entry.get('summary', '').strip()
                 published = entry.get('published', '')
+
+                # 24시간 이상 된 기사 제외
+                published_parsed = entry.get('published_parsed')
+                if published_parsed:
+                    pub_dt = datetime(*published_parsed[:6], tzinfo=timezone.utc)
+                    if pub_dt < cutoff:
+                        continue
 
                 # source: Google 뉴스는 entry.source.title, 언론사 직접 피드는 feed.feed.title
                 source = ''
@@ -119,15 +127,12 @@ def fetch_new_articles():
                     continue
 
                 seen.add(article_id)
-                text = title + ' ' + summary
-                matched = [kw for kw in CRITICAL_KEYWORDS if kw in text]
                 new_articles.append({
                     'title': title,
                     'url': url,
                     'summary': summary,
                     'published': published,
                     'source': source,
-                    'matched_keywords': matched[:3],
                 })
 
         except Exception as e:
@@ -146,10 +151,7 @@ def format_article(article):
     source = article.get('source', '')
     published = article.get('published', '')
 
-    matched = article.get('matched_keywords', [])
     lines = [f"🚨 <b>{title}</b>"]
-    if matched:
-        lines.append(f"🔑 감지: {' · '.join(matched)}")
     if source:
         lines.append(f"📌 {source}")
     if published:
