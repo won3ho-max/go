@@ -1,0 +1,6 @@
+news_bot/.env
+news_bot/seen_articles.json
+news_bot/bot.log
+news_bot/venv/
+__pycache__/
+*.pyc

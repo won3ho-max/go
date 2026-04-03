@@ -1,0 +1,18 @@
+[Unit]
+Description=농협 뉴스 모니터링 텔레그램 봇
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/news_bot
+ExecStart=/home/ubuntu/news_bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/news_bot/bot.log
+StandardError=append:/home/ubuntu/news_bot/bot.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
