@@ -94,6 +94,8 @@ STRUCTURAL_PROMO_PATTERNS = [
     # 무료 서비스·지원 (보이스피싱 보험 무료 지원, 무료 배포 등 캠페인성)
     '무료 지원', '무료 제공', '무료 배포', '무료 서비스',
     '취약계층 대상', '고령층 대상', '취약계층에게',
+    # 복지·사회공헌 지원 (경로당, 간식, 물품 배부 등)
+    '경로당', '간식 지원', '물품 지원', '물품 전달', '경로잔치',
     # 농산물·지역 홍보 행사
     '농산물 홍보', '홍보 부스', '홍보 행사', '홍보관 운영',
     '축제서 ', '축제에서 ',
@@ -359,14 +361,11 @@ def _to_kst_str(published: str) -> str:
 def format_article(article):
     title = article['title']
     url = article['url']
-    source = article.get('source', '')
     published = article.get('published', '')
 
     time_str = _to_kst_str(published)
 
-    lines = [f"<b>{title}</b>"]
-    if source:
-        lines.append(f"({source})")
+    lines = [f"📰 <b>{title}</b>"]
     if time_str:
         lines.append(time_str)
     lines.append(url)
