@@ -164,8 +164,9 @@ def get_article_id(url, title):
 
 def is_relevant(title, summary=''):
     text = title + ' ' + summary
-    # 1단계: 농협 관련 기사인지 확인
-    if not any(kw in text for kw in KEYWORDS):
+    # 1단계: 제목에 농협 관련 키워드가 있어야 통과
+    # (summary에만 '농협카드' 등이 언급되는 업계 일반 기사 차단)
+    if not any(kw in title for kw in KEYWORDS):
         return False
     # 2단계: 구조적 홍보성 패턴 즉시 차단 — 화이트리스트보다 우선 적용
     # (예: '조합장' 화이트리스트라도 '수상' 블랙리스트가 있으면 차단)
