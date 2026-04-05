@@ -1,0 +1,326 @@
+import feedparser
+import requests
+import hashlib
+import json
+import os
+import logging
+from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# 네이버 뉴스 검색 API 설정
+NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')
+NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')
+NAVER_API_URL = 'https://openapi.naver.com/v1/search/news.json'
+
+# 네이버 API로 검색할 쿼리 목록 (RSS 커버리지 보완용)
+NAVER_SEARCH_QUERIES = [
+    '농협',
+    'NH농협은행',
+    '농협중앙회',
+    '농협금융',
+]
+
+KEYWORDS = ['농협', 'NH농협', '농협은행', '농협중앙회', '농협금융', '농협생명', '농협손해보험', '농협카드']
+
+# ─────────────────────────────────────────────────────────────────
+# 필터링 설계 원칙 (v2: 화이트리스트 우선 방식)
+#
+# 기존 방식(블랙리스트 단독)의 문제:
+#   → 홍보성 패턴은 무한히 변형되므로, 새 패턴이 나올 때마다 수동 추가 필요
+#
+# 개선 방식:
+#   1단계: 농협 관련 기사인지 확인 (기존 유지)
+#   2단계: 화이트리스트 — 영양가 있는 키워드가 하나라도 있으면 즉시 통과
+#   3단계: 구조적 홍보성 패턴 차단 (포토/행사/지역활동 등)
+#   4단계: 기존 블랙리스트 (보완용)
+#
+# 핵심: "막을 것"을 정의하는 대신 "통과시킬 것"을 먼저 정의한다.
+# ─────────────────────────────────────────────────────────────────
+
+# 화이트리스트 — 이 중 하나라도 포함되면 영양가 있는 기사로 즉시 통과
+# ⚠️ 계열사 명칭 포함 단어 추가 금지 (예: '손해', '생명')
+WHITELIST_KEYWORDS = [
+    # 금융·경영 실적
+    '금리', '실적', '순이익', '영업이익', '당기순이익', '자산', '부실', '부실대출',
+    '여신', '수신', '대출', '예금', '연체', '적자', '흑자', '매출', '수익성',
+    'BIS', '자본비율', '건전성', '유동성',
+    # 사건·사고·이슈
+    '제재', '처벌', '징계', '조사', '수사', '압수수색', '검찰', '경찰',
+    '논란', '의혹', '피해', '소송', '분쟁', '고발', '고소',
+    '횡령', '배임', '비리', '부정', '사기', '불법',
+    '사고', '사건', '장애', '오류', '먹통',
+    # 인사·조직
+    '행장', '조합장', '대표이사', '취임', '선임', '연임', '해임', '사임', '사퇴',
+    '임원', '이사회', '주주총회', '감사',
+    # 정책·규제
+    '금감원', '금융위', '기획재정부', '규제', '개정', '의무화', '금지',
+    '감독', '검사', '제도 변경', '기준금리',
+    # 시장·전략
+    'IPO', '상장', '합병', '인수', '매각', '분사', '구조조정',
+    '금융사고', '내부통제',
+]
+
+# 구조적 홍보성 패턴 — 제목 시작 또는 특정 형태로 판별
+# (개별 단어가 아닌 "문장 패턴"으로 탐지)
+STRUCTURAL_PROMO_PATTERNS = [
+    # 포토·영상 기사
+    '[포토]', '[영상]', '[현장]', '[인터뷰]',
+    # 행사 동사 조합 (지역명 + 행사)
+    '행사 실시', '행사 개최', '행사를 개최', '행사를 실시',
+    '발대식', '출범식', '창립총회', '기념식',
+    # 지역 단위 홍보
+    '지부,', '지점,', '센터,', '지역본부,',
+    # 운영 공지성
+    '왕진버스', '무료가입', '무료 가입',
+    # 농산물·지역 소비
+    'K-푸드', '농산물 판매', '직거래',
+]
+
+# 블랙리스트 (기존 유지, 보완용)
+# ⚠️ 계열사 명칭 포함 단어 절대 추가 금지
+PROMO_KEYWORDS = [
+    # 신상품·서비스 출시
+    '출시', '론칭', '새로 선보', '새롭게 선보', '신상품', '신규 출시',
+    # 마케팅·이벤트
+    '이벤트', '캠페인', '프로모션', '할인', '경품',
+    # 협약·제휴
+    'MOU', '업무협약', '협약 체결',
+    # 수상·인증
+    '수상', '최우수상', '우수상', '시상식', '인증 획득', 'AWARDS', '어워즈',
+    # 사회공헌·봉사
+    '기부', '봉사', '사회공헌', 'CSR', '나눔', '후원', '일손돕기',
+    # 채용
+    '채용 설명회', '인턴 모집', '공채',
+    # 소비촉진
+    '소비촉진', '소비 촉진', '하나로마트',
+    # 영농·지역
+    '영농지도', '영농지원',
+    # 광고
+    '모델 발탁',
+]
+
+RSS_FEEDS = [
+    # Google 뉴스 (농협 검색)
+    "https://news.google.com/rss/search?q=농협&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=NH농협은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=농협중앙회&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — RSS 없는 언론사 보완 (MTN 머니투데이방송 등)
+    "https://news.google.com/rss/search?q=농협+site:news.mtn.co.kr&hl=ko&gl=KR&ceid=KR:ko",
+    # 연합뉴스
+    "https://www.yna.co.kr/rss/economy.xml",
+    "https://www.yna.co.kr/rss/society.xml",
+    "https://www.yna.co.kr/rss/industry.xml",
+    # 뉴시스
+    "https://www.newsis.com/RSS/economy.xml",
+    "https://www.newsis.com/RSS/bank.xml",
+    # 매일경제
+    "https://www.mk.co.kr/rss/30100041/",
+    # 머니투데이
+    "https://rss.mt.co.kr/mt_news.xml",
+    # 파이낸셜뉴스
+    "https://www.fnnews.com/rss/r20/fn_realnews_economy.xml",
+    "https://www.fnnews.com/rss/r20/fn_realnews_finance.xml",
+    # 서울경제
+    "https://www.sedaily.com/rss/finance",
+    # 아시아경제
+    "https://www.asiae.co.kr/rss/economy.htm",
+]
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SEEN_FILE = os.path.join(BASE_DIR, 'seen_articles.json')
+
+
+def load_seen():
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE, 'r', encoding='utf-8') as f:
+            return set(json.load(f))
+    return set()
+
+
+def save_seen(seen):
+    seen_list = list(seen)[-2000:]
+    with open(SEEN_FILE, 'w', encoding='utf-8') as f:
+        json.dump(seen_list, f, ensure_ascii=False)
+
+
+def get_article_id(url, title):
+    return hashlib.md5(f"{url}{title}".encode('utf-8')).hexdigest()
+
+
+def is_relevant(title, summary=''):
+    text = title + ' ' + summary
+    # 1단계: 농협 관련 기사인지 확인
+    if not any(kw in text for kw in KEYWORDS):
+        return False
+    # 2단계: 화이트리스트 — 영양가 있는 키워드가 하나라도 있으면 즉시 통과
+    if any(kw in text for kw in WHITELIST_KEYWORDS):
+        return True
+    # 3단계: 구조적 홍보성 패턴 차단 (포토/행사/지역활동 등)
+    if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
+        return False
+    # 4단계: 블랙리스트 차단 (보완용)
+    if any(kw in title for kw in PROMO_KEYWORDS):
+        return False
+    # 5단계: 화이트리스트 키워드 없으면 기본 차단 (홍보성 여부 불명확한 잡기사 제거)
+    return False
+
+
+def _strip_html(text: str) -> str:
+    """네이버 API 응답의 간단한 HTML 태그 제거"""
+    import re
+    return re.sub(r'<[^>]+>', '', text).strip()
+
+
+def fetch_from_naver(seen: set, cutoff: datetime) -> list:
+    """네이버 뉴스 검색 API로 기사를 수집해 반환한다.
+
+    NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수가 없으면 조용히 건너뜀.
+    RSS로 커버되지 않는 언론사(MTN 등)의 기사를 보완하는 용도.
+    """
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        logger.debug("네이버 API 키 미설정 — 건너뜀")
+        return []
+
+    headers = {
+        'X-Naver-Client-Id': NAVER_CLIENT_ID,
+        'X-Naver-Client-Secret': NAVER_CLIENT_SECRET,
+    }
+    articles = []
+
+    for query in NAVER_SEARCH_QUERIES:
+        try:
+            params = {
+                'query': query,
+                'display': 20,   # 회당 최대 수집 건수
+                'sort': 'date',  # 최신순
+            }
+            resp = requests.get(NAVER_API_URL, headers=headers, params=params, timeout=10)
+            resp.raise_for_status()
+            items = resp.json().get('items', [])
+
+            for item in items:
+                title = _strip_html(item.get('title', ''))
+                url = item.get('originallink') or item.get('link', '')
+                summary = _strip_html(item.get('description', ''))
+                pub_date_str = item.get('pubDate', '')  # RFC 822 형식
+
+                # 발행일 파싱 및 24시간 필터
+                if pub_date_str:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        pub_dt = parsedate_to_datetime(pub_date_str).astimezone(timezone.utc)
+                        if pub_dt < cutoff:
+                            continue
+                        published = pub_dt.strftime('%Y-%m-%d %H:%M KST')
+                    except Exception:
+                        published = pub_date_str
+                else:
+                    published = ''
+
+                if not title or not url:
+                    continue
+
+                # 홍보성 필터 적용 (1단계 키워드 체크는 쿼리 자체가 이미 농협 한정이므로 생략 가능하나 일관성을 위해 유지)
+                if not is_relevant(title, summary):
+                    continue
+
+                article_id = get_article_id(url, title)
+                if article_id in seen:
+                    continue
+
+                seen.add(article_id)
+                articles.append({
+                    'title': title,
+                    'url': url,
+                    'summary': summary,
+                    'published': published,
+                    'source': item.get('link', '').split('/')[2] if item.get('link') else '',
+                })
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"네이버 API 수집 오류 [query={query}]: {e}")
+
+    logger.info(f"네이버 API — 새 기사 {len(articles)}건 수집")
+    return articles
+
+
+def fetch_new_articles():
+    seen = load_seen()
+    new_articles = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    # ── 1. RSS 피드 수집 ─────────────────────────────────────────
+    for feed_url in RSS_FEEDS:
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries:
+                title = entry.get('title', '').strip()
+                url = entry.get('link', '').strip()
+                summary = entry.get('summary', '').strip()
+                published = entry.get('published', '')
+
+                # 24시간 이상 된 기사 제외
+                published_parsed = entry.get('published_parsed')
+                if published_parsed:
+                    pub_dt = datetime(*published_parsed[:6], tzinfo=timezone.utc)
+                    if pub_dt < cutoff:
+                        continue
+
+                # source: Google 뉴스는 entry.source.title, 언론사 직접 피드는 feed.feed.title
+                source = ''
+                if hasattr(entry, 'source') and hasattr(entry.source, 'title'):
+                    source = entry.source.title
+                elif hasattr(feed, 'feed') and hasattr(feed.feed, 'title'):
+                    source = feed.feed.title
+
+                if not title or not url:
+                    continue
+
+                if not is_relevant(title, summary):
+                    continue
+
+                article_id = get_article_id(url, title)
+                if article_id in seen:
+                    continue
+
+                seen.add(article_id)
+                new_articles.append({
+                    'title': title,
+                    'url': url,
+                    'summary': summary,
+                    'published': published,
+                    'source': source,
+                })
+
+        except Exception as e:
+            logger.error(f"피드 수집 오류 [{feed_url}]: {e}")
+
+    # ── 2. 네이버 뉴스 검색 API 수집 (RSS 미커버 언론사 보완) ──────
+    naver_articles = fetch_from_naver(seen, cutoff)
+    new_articles.extend(naver_articles)
+
+    if new_articles:
+        save_seen(seen)
+
+    logger.info(f"총 새 기사 {len(new_articles)}건 수집 (RSS + 네이버 API)")
+    return new_articles
+
+
+def format_article(article):
+    title = article['title']
+    url = article['url']
+    source = article.get('source', '')
+    published = article.get('published', '')
+
+    lines = [f"🚨 <b>{title}</b>"]
+    if source:
+        lines.append(f"📌 {source}")
+    if published:
+        lines.append(f"🕐 {published}")
+    lines.append(f"🔗 {url}")
+
+    return '\n'.join(lines)
