@@ -48,6 +48,8 @@ WHITELIST_KEYWORDS = [
     '금리', '실적', '순이익', '영업이익', '당기순이익', '자산', '부실', '부실대출',
     '여신', '수신', '대출', '예금', '연체', '적자', '흑자', '매출', '수익성',
     'BIS', '자본비율', '건전성', '유동성',
+    # 실적 달성·규모
+    '돌파', '달성', '사상 최대', '역대 최대', '최대 실적', '기술금융',
     # 사건·사고·이슈
     '제재', '처벌', '징계', '조사', '수사', '압수수색', '검찰', '경찰',
     '논란', '의혹', '피해', '소송', '분쟁', '고발', '고소',
@@ -102,6 +104,9 @@ PROMO_KEYWORDS = [
     'MOU', '업무협약', '협약 체결',
     # 수상·인증
     '수상', '최우수상', '우수상', '시상식', '인증 획득', 'AWARDS', '어워즈',
+    '조합장상', '○○상',
+    # 인물 탐방·칼럼 시리즈
+    '파수꾼', '현장의 파수꾼', '사람들', '인물탐방', '인물 탐방',
     # 사회공헌·봉사
     '기부', '봉사', '사회공헌', 'CSR', '나눔', '후원', '일손돕기',
     # 채용
@@ -323,17 +328,40 @@ def fetch_new_articles():
     return new_articles
 
 
+def _to_kst_str(published: str) -> str:
+    """발행 시각을 'M월 D일 오전/오후 H:MM' 형식(KST)으로 변환"""
+    if not published:
+        return ''
+    try:
+        from zoneinfo import ZoneInfo
+        KST = ZoneInfo('Asia/Seoul')
+        # 네이버 API 형식: "2026-04-05 20:02 KST"
+        if published.endswith('KST'):
+            dt = datetime.strptime(published, '%Y-%m-%d %H:%M KST').replace(tzinfo=KST)
+        else:
+            # RSS RFC 822 형식: "Sun, 05 Apr 2026 22:00:00 GMT"
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(published).astimezone(KST)
+        h, m = dt.hour, dt.minute
+        ampm = '오전' if h < 12 else '오후'
+        h12 = h % 12 or 12
+        return f"{dt.month}월 {dt.day}일 {ampm} {h12}:{m:02d}"
+    except Exception:
+        return published
+
+
 def format_article(article):
     title = article['title']
     url = article['url']
     source = article.get('source', '')
     published = article.get('published', '')
 
-    lines = [f"🚨 <b>{title}</b>"]
-    if source:
-        lines.append(f"📌 {source}")
-    if published:
-        lines.append(f"🕐 {published}")
-    lines.append(f"🔗 {url}")
+    time_str = _to_kst_str(published)
+    meta = ' · '.join(filter(None, [source, time_str]))
+
+    lines = [f"<b>{title}</b>"]
+    if meta:
+        lines.append(meta)
+    lines.append(url)
 
     return '\n'.join(lines)
