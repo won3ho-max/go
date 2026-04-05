@@ -78,6 +78,11 @@ STRUCTURAL_PROMO_PATTERNS = [
     '왕진버스', '무료가입', '무료 가입',
     # 농산물·지역 소비
     'K-푸드', '농산물 판매', '직거래',
+    # 예방 캠페인성 (사고·사기 예방 특강·홍보 등 — 실제 사고 기사가 아님)
+    '예방 특강', '피해 예방', '예방 총력', '예방에 앞장', '예방 캠페인',
+    '예방 교육', '예방 활동', '예방 홍보',
+    # 지역 정례 행사
+    '정례조회', '월례회', '도민체전',
 ]
 
 # 블랙리스트 (기존 유지, 보완용)
@@ -156,16 +161,17 @@ def is_relevant(title, summary=''):
     # 1단계: 농협 관련 기사인지 확인
     if not any(kw in text for kw in KEYWORDS):
         return False
-    # 2단계: 화이트리스트 — 영양가 있는 키워드가 하나라도 있으면 즉시 통과
-    if any(kw in text for kw in WHITELIST_KEYWORDS):
-        return True
-    # 3단계: 구조적 홍보성 패턴 차단 (포토/행사/지역활동 등)
+    # 2단계: 구조적 홍보성 패턴 즉시 차단 — 화이트리스트보다 우선 적용
+    # (예: '조합장' 화이트리스트라도 '수상' 블랙리스트가 있으면 차단)
     if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
         return False
-    # 4단계: 블랙리스트 차단 (보완용)
+    # 3단계: 블랙리스트 차단 — 화이트리스트보다 우선 적용
     if any(kw in title for kw in PROMO_KEYWORDS):
         return False
-    # 5단계: 화이트리스트 키워드 없으면 기본 차단 (홍보성 여부 불명확한 잡기사 제거)
+    # 4단계: 화이트리스트 — 홍보성 아닌 기사 중 영양가 있는 것만 통과
+    if any(kw in text for kw in WHITELIST_KEYWORDS):
+        return True
+    # 5단계: 화이트리스트 키워드 없으면 기본 차단
     return False
 
 
