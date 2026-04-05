@@ -91,6 +91,12 @@ STRUCTURAL_PROMO_PATTERNS = [
     # 스포츠·친목 행사
     '파크골프', '골프대회', '골프 대회', '체육대회', '체육 대회',
     '등산대회', '마라톤대회',
+    # 무료 서비스·지원 (보이스피싱 보험 무료 지원, 무료 배포 등 캠페인성)
+    '무료 지원', '무료 제공', '무료 배포', '무료 서비스',
+    '취약계층 대상', '고령층 대상', '취약계층에게',
+    # 농산물·지역 홍보 행사
+    '농산물 홍보', '홍보 부스', '홍보 행사', '홍보관 운영',
+    '축제서 ', '축제에서 ',
 ]
 
 # 블랙리스트 (기존 유지, 보완용)
@@ -357,11 +363,12 @@ def format_article(article):
     published = article.get('published', '')
 
     time_str = _to_kst_str(published)
-    meta = ' · '.join(filter(None, [source, time_str]))
 
     lines = [f"<b>{title}</b>"]
-    if meta:
-        lines.append(meta)
+    if source:
+        lines.append(f"({source})")
+    if time_str:
+        lines.append(time_str)
     lines.append(url)
 
     return '\n'.join(lines)
