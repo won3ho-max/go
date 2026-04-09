@@ -14,11 +14,12 @@ jobs:
           host: 34.50.62.215
           username: won3ho
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          request_pty: true
           script: |
-            pkill -9 -f "python3 main.py" || true
-            sleep 2
             cd ~/news_bot && git pull origin main
+            kill $(pgrep -f "python3 main.py") 2>/dev/null || true
+            sleep 3
             cd ~/news_bot/news_bot
             nohup python3 main.py >> ~/bot.log 2>&1 &
-            sleep 2
-            ps aux | grep "python3 main.py" | grep -v grep && echo "배포 완료"
+            disown
+            echo "배포 완료"
