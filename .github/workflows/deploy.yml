@@ -1,0 +1,24 @@
+name: Deploy to news-bot
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 접속 후 배포
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 34.50.62.215
+          username: won3ho
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            pkill -9 -f "python3 main.py" || true
+            sleep 2
+            cd ~/news_bot && git pull origin main
+            cd ~/news_bot/news_bot
+            nohup python3 main.py >> ~/bot.log 2>&1 &
+            sleep 2
+            ps aux | grep "python3 main.py" | grep -v grep && echo "배포 완료"
