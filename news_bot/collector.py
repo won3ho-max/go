@@ -111,6 +111,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     '현장 방문', '현장점검', '현장 점검', '격려 방문', '방문·격려',
     '현장경영', '현장 경영',
     '투자기업 방문', '투자기업 점검', '투자기업 지원 강화',
+    '펀드 투자기업',
     # 지역 보조·지원 사업
     '보조사업 실시', '보조사업 추진', '지원사업 실시', '지원사업 추진',
     # 캠페인 활동 전파
@@ -201,6 +202,12 @@ def get_article_id(url, title):
     return hashlib.md5(f"{url}{title}".encode('utf-8')).hexdigest()
 
 
+def get_title_id(title):
+    """제목 앞 30자 기준 중복 제거용 ID — 같은 기사가 여러 언론사에서 오는 경우 차단"""
+    normalized = title[:30].strip()
+    return 'title:' + hashlib.md5(normalized.encode('utf-8')).hexdigest()
+
+
 def is_relevant(title, summary=''):
     text = title + ' ' + summary
     # 1단계: 제목에 농협 관련 키워드가 있어야 통과
@@ -287,10 +294,12 @@ def fetch_from_naver(seen: set, cutoff: datetime) -> list:
                     continue
 
                 article_id = get_article_id(url, title)
-                if article_id in seen:
+                title_id = get_title_id(title)
+                if article_id in seen or title_id in seen:
                     continue
 
                 seen.add(article_id)
+                seen.add(title_id)
                 articles.append({
                     'title': title,
                     'url': url,
@@ -342,10 +351,12 @@ def fetch_new_articles():
                     continue
 
                 article_id = get_article_id(url, title)
-                if article_id in seen:
+                title_id = get_title_id(title)
+                if article_id in seen or title_id in seen:
                     continue
 
                 seen.add(article_id)
+                seen.add(title_id)
                 new_articles.append({
                     'title': title,
                     'url': url,
