@@ -16,16 +16,29 @@ jobs:
       - name: Deploy
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
-          pkill -9 -f 'main.py' 2>/dev/null || true
-          sleep 2
+          set -e
+
+          # 1. 코드 업데이트
           cd ~/news_bot
           git fetch origin main
           git checkout origin/main -- news_bot/main.py
           git checkout origin/main -- news_bot/collector.py
-          echo "=== main.py format check ==="
-          grep -c "🚨" news_bot/main.py && echo "OLD FORMAT" || echo "NEW FORMAT OK"
-          cd ~/news_bot/news_bot
-          nohup python3 main.py >> ~/bot.log 2>&1 &
-          echo "done"
-          exit 0
+
+          # 2. systemd 서비스 파일 생성 (매번 최신 상태로 덮어씀)
+          printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
+
+          # 3. 혹시라도 살아있는 구봇 강제 종료 (python / python3 모두)
+          sudo pkill -9 -f 'main.py' 2>/dev/null || true
+          sleep 2
+
+          # 4. systemd 서비스 등록 및 재시작
+          sudo systemctl daemon-reload
+          sudo systemctl enable news_bot
+          sudo systemctl restart news_bot
+          sleep 3
+
+          # 5. 상태 검증
+          sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
+          echo "=== format check ==="
+          grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
           ENDSSH
