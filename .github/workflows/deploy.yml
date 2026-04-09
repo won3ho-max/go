@@ -8,13 +8,17 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: SSH 접속 후 배포
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: 34.50.62.215
-          username: won3ho
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ~/news_bot && git pull origin main
-            (sleep 1; pkill -9 -f 'python3 main.py' || true; sleep 3; cd ~/news_bot/news_bot; nohup python3 main.py >> ~/bot.log 2>&1 &) &
-            echo "배포 완료"
+      - name: SSH 키 설정
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 배포
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 \
+          "cd ~/news_bot && git pull origin main && \
+          (sleep 1; pkill -9 -f 'python3 main.py' || true; sleep 3; \
+          cd ~/news_bot/news_bot; nohup python3 main.py >> ~/bot.log 2>&1 &) & \
+          echo 배포완료"
