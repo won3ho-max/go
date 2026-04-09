@@ -16,13 +16,14 @@ jobs:
       - name: Deploy
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
-          echo "=== force kill ==="
-          pkill -9 -f 'python3 main.py' && echo "KILLED" || echo "no process"
+          pkill -9 -f 'python3 main.py' 2>/dev/null || true
           sleep 2
-          ps aux | grep 'main.py' | grep -v grep || echo "confirmed dead"
-          echo "=== pull & restart ==="
-          cd ~/news_bot && git pull origin main
-          sleep 1
+          cd ~/news_bot
+          git fetch origin main
+          git checkout origin/main -- news_bot/main.py
+          git checkout origin/main -- news_bot/collector.py
+          echo "=== main.py format check ==="
+          grep -c "🚨" news_bot/main.py && echo "OLD FORMAT" || echo "NEW FORMAT OK"
           cd ~/news_bot/news_bot
           nohup python3 main.py >> ~/bot.log 2>&1 &
           echo "done"
