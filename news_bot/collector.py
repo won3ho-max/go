@@ -3,6 +3,7 @@ import requests
 import hashlib
 import json
 import os
+import re
 import logging
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -183,6 +184,7 @@ RSS_FEEDS = [
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SEEN_FILE = os.path.join(BASE_DIR, 'seen_articles.json')
+SEEN_TITLES_FILE = os.path.join(BASE_DIR, 'seen_titles.json')
 
 
 def load_seen():
@@ -198,14 +200,49 @@ def save_seen(seen):
         json.dump(seen_list, f, ensure_ascii=False)
 
 
+def load_seen_titles() -> list:
+    if os.path.exists(SEEN_TITLES_FILE):
+        with open(SEEN_TITLES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+
+def save_seen_titles(titles: list):
+    with open(SEEN_TITLES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(titles[-100:], f, ensure_ascii=False)
+
+
 def get_article_id(url, title):
     return hashlib.md5(f"{url}{title}".encode('utf-8')).hexdigest()
 
 
-def get_title_id(title):
-    """제목 앞 30자 기준 중복 제거용 ID — 같은 기사가 여러 언론사에서 오는 경우 차단"""
-    normalized = title[:30].strip()
-    return 'title:' + hashlib.md5(normalized.encode('utf-8')).hexdigest()
+def _extract_key_words(title: str) -> set:
+    """특수문자 제거 후 3글자 이상 단어 추출 — 핵심 명사 위주"""
+    normalized = re.sub(r'[^\w\s]', ' ', title)
+    return {w for w in normalized.split() if len(w) >= 3}
+
+
+def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> bool:
+    """핵심 키워드 3개 이상 겹치면 유사 기사로 판단.
+    부분 문자열도 매칭 — 예: '농협은행장' ↔ 'NH농협은행장'
+    """
+    words_new = _extract_key_words(title)
+    if len(words_new) < 2:
+        return False
+    for prev in recent_titles:
+        words_prev = _extract_key_words(prev)
+        matched_prev = set()
+        count = 0
+        for wn in words_new:
+            for wp in words_prev:
+                if wp not in matched_prev and (wn == wp or wn in wp or wp in wn):
+                    count += 1
+                    matched_prev.add(wp)
+                    break
+        if count >= min_matches:
+            logger.debug(f"유사 기사 차단: '{title[:30]}' ↔ '{prev[:30]}'")
+            return True
+    return False
 
 
 def is_relevant(title, summary=''):
@@ -236,11 +273,10 @@ def is_relevant(title, summary=''):
 
 def _strip_html(text: str) -> str:
     """네이버 API 응답의 간단한 HTML 태그 제거"""
-    import re
     return re.sub(r'<[^>]+>', '', text).strip()
 
 
-def fetch_from_naver(seen: set, cutoff: datetime) -> list:
+def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
     """네이버 뉴스 검색 API로 기사를 수집해 반환한다.
 
     NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수가 없으면 조용히 건너뜀.
@@ -294,12 +330,13 @@ def fetch_from_naver(seen: set, cutoff: datetime) -> list:
                     continue
 
                 article_id = get_article_id(url, title)
-                title_id = get_title_id(title)
-                if article_id in seen or title_id in seen:
+                if article_id in seen:
+                    continue
+                if _is_similar_title(title, seen_titles):
                     continue
 
                 seen.add(article_id)
-                seen.add(title_id)
+                seen_titles.append(title)
                 articles.append({
                     'title': title,
                     'url': url,
@@ -317,6 +354,7 @@ def fetch_from_naver(seen: set, cutoff: datetime) -> list:
 
 def fetch_new_articles():
     seen = load_seen()
+    seen_titles = load_seen_titles()
     new_articles = []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
@@ -351,12 +389,13 @@ def fetch_new_articles():
                     continue
 
                 article_id = get_article_id(url, title)
-                title_id = get_title_id(title)
-                if article_id in seen or title_id in seen:
+                if article_id in seen:
+                    continue
+                if _is_similar_title(title, seen_titles):
                     continue
 
                 seen.add(article_id)
-                seen.add(title_id)
+                seen_titles.append(title)
                 new_articles.append({
                     'title': title,
                     'url': url,
@@ -369,11 +408,12 @@ def fetch_new_articles():
             logger.error(f"피드 수집 오류 [{feed_url}]: {e}")
 
     # ── 2. 네이버 뉴스 검색 API 수집 (RSS 미커버 언론사 보완) ──────
-    naver_articles = fetch_from_naver(seen, cutoff)
+    naver_articles = fetch_from_naver(seen, seen_titles, cutoff)
     new_articles.extend(naver_articles)
 
     if new_articles:
         save_seen(seen)
+        save_seen_titles(seen_titles)
 
     logger.info(f"총 새 기사 {len(new_articles)}건 수집 (RSS + 네이버 API)")
     return new_articles
