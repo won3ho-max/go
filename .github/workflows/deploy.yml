@@ -16,7 +16,7 @@ jobs:
       - name: Deploy
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
-          pkill -9 -f 'python3 main.py' 2>/dev/null || true
+          pkill -9 -f 'main.py' 2>/dev/null || true
           sleep 2
           cd ~/news_bot
           git fetch origin main
