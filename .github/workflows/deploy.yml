@@ -16,16 +16,18 @@ jobs:
       - name: Deploy
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
-          sudo systemctl stop news_bot 2>/dev/null || true
-          sudo systemctl disable news_bot 2>/dev/null || true
+          echo "=== stop old service ==="
+          sudo -n systemctl stop news_bot && echo "STOP: OK" || echo "STOP: FAILED (no sudo?)"
+          sudo -n systemctl disable news_bot && echo "DISABLE: OK" || echo "DISABLE: FAILED"
+          sudo -n pkill -u ubuntu -f python && echo "KILL: OK" || echo "KILL: FAILED"
+          echo "=== pull & restart ==="
           cd ~/news_bot
           git pull origin main
           pkill -f 'python3 main.py' 2>/dev/null || true
-          pkill -f 'python main.py' 2>/dev/null || true
           sleep 3
           cd ~/news_bot/news_bot
           nohup python3 main.py >> ~/bot.log 2>&1 &
-          echo done
+          echo "done"
           exit 0
           ENDSSH
           
