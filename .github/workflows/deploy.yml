@@ -19,6 +19,8 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 \
           "cd ~/news_bot && git pull origin main && \
-          (sleep 1; pkill -9 -f 'python3 main.py' || true; sleep 3; \
-          cd ~/news_bot/news_bot; nohup python3 main.py >> ~/bot.log 2>&1 &) & \
-          echo 배포완료"
+          pkill -f 'python3 main.py' || true && sleep 3 && \
+          cd ~/news_bot/news_bot && \
+          nohup python3 main.py >> ~/bot.log 2>&1 & \
+          sleep 3 && ps aux | grep 'python3 main.py' | grep -v grep && echo 배포완료"
+          
