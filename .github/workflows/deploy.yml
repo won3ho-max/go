@@ -1,29 +1,31 @@
 name: Deploy to news-bot
-
 on:
   push:
     branches: [main]
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: SSH 키 설정
+      - name: SSH key setup
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: 배포
+      - name: Deploy
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
+          sudo systemctl stop news_bot 2>/dev/null || true
+          sudo systemctl disable news_bot 2>/dev/null || true
           cd ~/news_bot
           git pull origin main
           pkill -f 'python3 main.py' 2>/dev/null || true
+          pkill -f 'python main.py' 2>/dev/null || true
           sleep 3
           cd ~/news_bot/news_bot
           nohup python3 main.py >> ~/bot.log 2>&1 &
-          echo 배포완료
+          echo done
           exit 0
           ENDSSH
+          
