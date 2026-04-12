@@ -379,6 +379,17 @@ def fetch_new_articles():
                     pub_dt = datetime(*published_parsed[:6], tzinfo=timezone.utc)
                     if pub_dt < cutoff:
                         continue
+                else:
+                    # published_parsed 없으면 published 문자열로 직접 파싱 시도
+                    published_str = entry.get('published', '')
+                    if published_str:
+                        try:
+                            from email.utils import parsedate_to_datetime
+                            pub_dt = parsedate_to_datetime(published_str).astimezone(timezone.utc)
+                            if pub_dt < cutoff:
+                                continue
+                        except Exception:
+                            pass  # 파싱 실패 시 통과 허용
 
                 # source: Google 뉴스는 entry.source.title, 언론사 직접 피드는 feed.feed.title
                 source = ''
