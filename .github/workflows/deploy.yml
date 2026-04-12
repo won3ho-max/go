@@ -27,28 +27,25 @@ jobs:
           # 2. systemd 서비스 파일 생성
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
 
-          # 3. 모든 python 프로세스 + screen/tmux 백그라운드 세션 종료
-          echo "=== before kill ==="
-          ps aux | grep -v grep | grep -E 'python|main\.py' || echo "none"
+          # 3. 크론잡 제거 (구봇 자동 재시작 원인)
+          crontab -r 2>/dev/null || true
+          echo "=== cron after removal ==="
+          crontab -l 2>/dev/null || echo "no cron"
+
+          # 4. 모든 python 프로세스 종료
           sudo pkill -9 -f 'main.py' 2>/dev/null || true
           sudo pkill -9 -u won3ho -f python 2>/dev/null || true
-          pkill -9 -u won3ho SCREEN 2>/dev/null || true
-          tmux kill-server 2>/dev/null || true
           sleep 3
           echo "=== after kill ==="
           ps aux | grep -v grep | grep -E 'python|main\.py' || echo "none"
-          echo "=== cron check ==="
-          crontab -l 2>/dev/null && echo "CRON_EXISTS" || echo "no cron"
-          echo "=== screen check ==="
-          screen -ls 2>/dev/null || echo "no screen"
 
-          # 4. systemd 서비스 재시작
+          # 5. systemd 서비스 재시작
           sudo systemctl daemon-reload
           sudo systemctl enable news_bot
           sudo systemctl restart news_bot
           sleep 3
 
-          # 5. 검증
+          # 6. 검증
           sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
           echo "=== format check ==="
           grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
