@@ -27,13 +27,16 @@ jobs:
           # 2. systemd 서비스 파일 생성
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
 
-          # 3. won3ho 유저의 모든 python 프로세스 전부 종료
+          # 3. 모든 유저의 main.py 프로세스 + won3ho의 모든 python 프로세스 강제 종료
+          echo "=== before kill ==="
+          ps aux | grep -v grep | grep -E 'python|main\.py' || echo "none"
+          sudo pkill -9 -f 'main.py' 2>/dev/null || true
           sudo pkill -9 -u won3ho -f python 2>/dev/null || true
           sleep 3
-          REMAINING=$(pgrep -u won3ho -f python | wc -l)
-          echo "Remaining python procs after kill: $REMAINING"
+          echo "=== after kill ==="
+          ps aux | grep -v grep | grep -E 'python|main\.py' || echo "none"
 
-          # 4. systemd로 재시작
+          # 4. systemd 서비스 재시작
           sudo systemctl daemon-reload
           sudo systemctl enable news_bot
           sudo systemctl restart news_bot
@@ -43,6 +46,6 @@ jobs:
           sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
           echo "=== format check ==="
           grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
-          echo "=== running python procs ==="
-          pgrep -u won3ho -a -f python || echo "none"
+          echo "=== final running procs ==="
+          ps aux | grep -v grep | grep python || echo "none"
           ENDSSH
