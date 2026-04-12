@@ -156,11 +156,10 @@ def main():
         first=10
     )
 
-    for hour in [9, 12, 15, 20]:
-        app.job_queue.run_daily(
-            heartbeat,
-            time=time(hour, 0, 0, tzinfo=KST),
-        )
+    app.job_queue.run_daily(
+        heartbeat,
+        time=time(15, 0, 0, tzinfo=KST),
+    )
 
     app.job_queue.run_daily(
         send_pending,
