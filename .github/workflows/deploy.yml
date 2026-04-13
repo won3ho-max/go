@@ -1,0 +1,51 @@
+name: Deploy to news-bot
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH key setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
+          set -e
+
+          # 1. 코드 업데이트
+          cd ~/news_bot
+          git fetch origin main
+          git checkout origin/main -- news_bot/main.py
+          git checkout origin/main -- news_bot/collector.py
+
+          # 2. 텔레그램 봇 토큰 업데이트
+          sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|" ~/news_bot/news_bot/.env
+
+          # 3. systemd 서비스 파일 생성
+          printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
+
+          # 4. 자동 시작 메커니즘 제거
+          crontab -r 2>/dev/null || true
+
+          # 5. 모든 python 프로세스 종료
+          sudo pkill -9 -f 'main.py' 2>/dev/null || true
+          sudo pkill -9 -u won3ho -f python 2>/dev/null || true
+          sleep 3
+
+          # 6. systemd 서비스 재시작
+          sudo systemctl daemon-reload
+          sudo systemctl enable news_bot
+          sudo systemctl restart news_bot
+          sleep 3
+
+          # 7. 검증
+          sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
+          grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
+          ps aux | grep -v grep | grep 'won3ho.*python' || echo "none"
+          ENDSSH
