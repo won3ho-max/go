@@ -1,0 +1,31 @@
+name: 텔레그램 종목 추천 감지
+
+on:
+  schedule:
+    # 월요일 23:00 KST = 월요일 14:00 UTC
+    - cron: '0 14 * * 1'
+    # 화요일 18:00 KST = 화요일 09:00 UTC
+    - cron: '0 9 * * 2'
+  workflow_dispatch:
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install --quiet gspread google-auth requests
+
+      - name: 종목 추천 감지 → Sheets 기록
+        env:
+          TELEGRAM_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
+          GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
+          GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
+        run: python telegram_listener_gsheets.py

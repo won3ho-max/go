@@ -1,0 +1,17 @@
+# 민감 정보 - 절대 커밋 금지
+*.json
+!portfolio.json
+!pending_stocks.json
+
+# 엑셀 파일
+*.xlsx
+*.xlsm
+
+# 이미지 출력물
+한탕_데일리_*.png
+
+# 기타
+__pycache__/
+*.pyc
+.DS_Store
+gsheets_service_account.txt
