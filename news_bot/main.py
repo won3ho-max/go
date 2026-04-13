@@ -1,6 +1,8 @@
 import os
+import sys
 import json
 import logging
+import fcntl
 from datetime import time, datetime
 from zoneinfo import ZoneInfo
 from telegram import Update
@@ -10,6 +12,20 @@ from collector import fetch_new_articles, format_article
 
 KST = ZoneInfo('Asia/Seoul')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCK_FILE = os.path.join(BASE_DIR, '.bot.lock')
+
+
+def _acquire_lock():
+    """단일 인스턴스 보장 — 이미 봇이 실행 중이면 즉시 종료"""
+    lock_fd = open(LOCK_FILE, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        return lock_fd  # 프로세스 종료 시 자동 해제
+    except BlockingIOError:
+        print(f"[BLOCKED] 봇이 이미 실행 중입니다. 중복 실행을 차단합니다. (lock: {LOCK_FILE})")
+        sys.exit(1)
 PENDING_FILE = os.path.join(BASE_DIR, 'pending_articles.json')
 
 
@@ -139,6 +155,9 @@ async def scheduled_check(context):
 
 
 def main():
+    # 단일 인스턴스 잠금 — 구봇 부활 원천 차단
+    _lock = _acquire_lock()
+
     if not BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN 환경변수가 없습니다. .env 파일을 확인하세요.")
     if not CHAT_ID:
