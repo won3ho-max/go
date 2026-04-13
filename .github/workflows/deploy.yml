@@ -27,10 +27,10 @@ jobs:
           # 2. systemd 서비스 파일 생성
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
 
-          # 3. 크론잡 제거 (구봇 자동 재시작 원인)
+          # 3. 모든 크론잡 제거 (유저 + 시스템)
           crontab -r 2>/dev/null || true
-          echo "=== cron after removal ==="
-          crontab -l 2>/dev/null || echo "no cron"
+          sudo crontab -r 2>/dev/null || true
+          sudo grep -rl 'main.py' /etc/cron.d/ /etc/cron.daily/ /etc/crontab 2>/dev/null && echo "SYSTEM_CRON_FOUND" || echo "no system cron"
 
           # 4. 모든 python 프로세스 종료
           sudo pkill -9 -f 'main.py' 2>/dev/null || true
@@ -47,8 +47,10 @@ jobs:
 
           # 6. 검증
           sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
-          echo "=== format check ==="
           grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
-          echo "=== final running procs ==="
+          echo "=== cron check ==="
+          crontab -l 2>/dev/null || echo "no user cron"
+          sudo crontab -l 2>/dev/null || echo "no root cron"
+          echo "=== final procs ==="
           ps aux | grep -v grep | grep python || echo "none"
           ENDSSH
