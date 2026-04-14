@@ -145,11 +145,33 @@ def load_portfolio():
                 "sell_date": s.get("sell_date", ""),
             })
 
-        total_ret = sum(s["ret"] for s in stocks if s["ret"] is not None)
-        if stocks:
+        # 실현 종목 추가
+        realized = []
+        for r in p.get("realized", []):
+            ret_pct = r.get("return_pct")
+            ret = ret_pct / 100 if ret_pct is not None else None
+            realized.append({
+                "name":      r.get("name", ""),
+                "short":     shorten_name(r.get("name", "")),
+                "status":    "sold",
+                "rec_date":  r.get("rec_date", ""),
+                "sell_date": r.get("sell_date", ""),
+                "base":      r.get("base_price") or 0,
+                "sell_price": r.get("sell_price") or 0,
+                "ret":       ret,
+            })
+
+        # 총 수익률: 활성 + 실현 모두 포함
+        active_rets = [s["ret"] for s in stocks if s["ret"] is not None]
+        realized_rets = [r["ret"] for r in realized if r["ret"] is not None]
+        all_rets = active_rets + realized_rets
+        total_ret = sum(all_rets) / max(len(all_rets), 1) if all_rets else 0
+
+        if stocks or realized:
             persons.append({
                 "person":    p["name"],
                 "stocks":    stocks,
+                "realized":  realized,
                 "total_ret": total_ret,
             })
 
@@ -226,7 +248,9 @@ def render_ranking(d, y, persons):
         rb = rf.getbbox(rn)
         d.text((cx-(rb[2]-rb[0])//2, cy-(rb[3]-rb[1])//2-1), rn, font=rf, fill=fc)
         d.text((PAD+38, ry+10), p["person"], font=_font(bold=True, size=15), fill=WHITE)
-        summary = "  ·  ".join(f"{s['short'][:8]} {pct_str(s['ret'])}" for s in p["stocks"])
+        all_items = [(s['short'][:8], s['ret']) for s in p["stocks"]] + \
+                    [(r['short'][:8], r['ret']) for r in p.get("realized", [])]
+        summary = "  ·  ".join(f"{n} {pct_str(r)}" for n, r in all_items)
         d.text((PAD+38, ry+30), summary, font=_font(size=10), fill=GREY_TEXT)
         ret = p["total_ret"]
         ret_color = GREEN if ret >= 0 else RED
@@ -270,6 +294,28 @@ def render_person_detail(d, y, person_data, rank):
         draw_text_right(d, CARD_W-36, y+10, price_str(s["current"], s["market"]), _font(size=13), WHITE_DIM)
         draw_text_right(d, CARD_W-36, y+30, pct_str(s["ret"]), _font(bold=True, size=15), ret_color)
         y += ROW_H
+
+    # ── 실현 종목 표시 ─────────────────────────────────────
+    for ri, r in enumerate(p.get("realized", [])):
+        ROW_H = 56
+        draw_rect(d, 0, y, CARD_W, y+ROW_H, BG_CARD)
+        d.line([36, y, CARD_W-36, y], fill=GREY_BORDER, width=1)
+        # 매도 배지
+        SOLD_BG = (58, 36, 26)
+        SOLD_TEXT = (255, 160, 80)
+        draw_rect(d, 36, y+15, 70, y+29, SOLD_BG, radius=3)
+        bfont = _font(bold=True, size=9)
+        bb = bfont.getbbox("매도")
+        d.text((36+(34-(bb[2]-bb[0]))//2, y+17), "매도", font=bfont, fill=SOLD_TEXT)
+        d.text((80, y+10), shorten_name(r["name"])[:22], font=_font(bold=True, size=13), fill=(120, 120, 140))
+        sell_dt = r.get("sell_date", "")
+        meta = f"매도 {sell_dt[5:] if sell_dt else ''}  ·  기준 {price_str(r['base'], 'KR')}"
+        d.text((80, y+30), meta, font=_font(size=10), fill=GREY_TEXT)
+        ret_color = GREEN if (r["ret"] or 0) >= 0 else RED
+        draw_text_right(d, CARD_W-36, y+10, price_str(r.get("sell_price", 0), "KR"), _font(size=13), (120, 120, 140))
+        draw_text_right(d, CARD_W-36, y+30, pct_str(r["ret"]), _font(bold=True, size=15), ret_color)
+        y += ROW_H
+
     return y
 
 def render_upcoming(d, y, persons):
@@ -329,10 +375,11 @@ def render_footer(d, y):
 
 # ── 이미지 생성 ──────────────────────────────────────────────────────────
 def generate_image(sheet_name: str, persons: list, today: datetime.date) -> str:
+    total_stock_rows = sum(len(p["stocks"]) + len(p.get("realized", [])) for p in persons)
     estimated_h = (
         200 + 52 + len(persons)*64 + 16
-        + 52 + len(persons)*(44 + 2*56)
-        + 52 + 4*52 + 28 + 72 + 40
+        + 52 + len(persons)*44 + total_stock_rows*56
+        + 52 + 6*52 + 28 + 72 + 100
     )
     img = Image.new("RGB", (CARD_W, estimated_h), BG)
     d   = ImageDraw.Draw(img)

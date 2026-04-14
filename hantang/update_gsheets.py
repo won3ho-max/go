@@ -431,13 +431,57 @@ def export_portfolio_json(all_values: list, sheet_name: str, today: datetime.dat
                 "sell_date":     sell_date,
             })
 
-        total = round(
-            sum(s["return_pct"] for s in stocks if s["return_pct"] is not None)
-            / max(len([s for s in stocks if s["return_pct"] is not None]), 1), 2
-        ) if stocks else 0.0
+        # ── 실현 종목 (P-U열) ────────────────────────────────────
+        realized = []
+        for row_1 in range(block["row_start"], block["row_end"] + 1):
+            idx = row_1 - 1
+            if idx >= len(all_values): continue
+            row = all_values[idx]
+
+            def cell_r(c): return row[c-1] if len(row) >= c else ""
+
+            p_name     = cell_r(16)   # P: 종목명
+            p_rec      = cell_r(17)   # Q: 추천일
+            p_sell_dt  = cell_r(18)   # R: 매도일
+            p_base     = cell_r(19)   # S: 추천일 기준가
+            p_sell_pr  = cell_r(20)   # T: 매도일 기준가
+            p_ret      = cell_r(21)   # U: 수익률
+
+            if not p_name: continue
+
+            try:
+                ret_val = float(str(p_ret).replace("%", "").replace(",", ""))
+                # U열이 소수(0.05 = 5%)인지 백분율(5.0)인지 판별
+                if -1 < ret_val < 1 and ret_val != 0:
+                    ret_val = round(ret_val * 100, 2)
+                else:
+                    ret_val = round(ret_val, 2)
+            except Exception:
+                ret_val = None
+
+            try:
+                bp = float(str(p_base).replace(",", ""))
+                sp = float(str(p_sell_pr).replace(",", ""))
+            except Exception:
+                bp = sp = None
+
+            realized.append({
+                "name": str(p_name).strip(), "status": "sold",
+                "rec_date":    p_rec[:10] if p_rec else None,
+                "sell_date":   p_sell_dt[:10] if p_sell_dt else None,
+                "base_price":  bp,
+                "sell_price":  sp,
+                "return_pct":  ret_val,
+            })
+
+        # 총 수익률: 활성 + 실현 모두 포함
+        all_rets = [s["return_pct"] for s in stocks if s["return_pct"] is not None] + \
+                   [r["return_pct"] for r in realized if r["return_pct"] is not None]
+        total = round(sum(all_rets) / max(len(all_rets), 1), 2) if all_rets else 0.0
 
         if person:
-            persons.append({"name": person, "stocks": stocks, "total_return": total})
+            persons.append({"name": person, "stocks": stocks,
+                            "realized": realized, "total_return": total})
 
     data = {"date": str(today), "sheet": sheet_name, "persons": persons}
     out  = BASE_DIR / "portfolio.json"
