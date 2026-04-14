@@ -477,7 +477,7 @@ def export_portfolio_json(all_values: list, sheet_name: str, today: datetime.dat
         # 총 수익률: 활성 + 실현 모두 포함
         all_rets = [s["return_pct"] for s in stocks if s["return_pct"] is not None] + \
                    [r["return_pct"] for r in realized if r["return_pct"] is not None]
-        total = round(sum(all_rets) / max(len(all_rets), 1), 2) if all_rets else 0.0
+        total = round(sum(all_rets), 2) if all_rets else 0.0
 
         if person:
             persons.append({"name": person, "stocks": stocks,

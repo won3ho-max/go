@@ -165,7 +165,7 @@ def load_portfolio():
         active_rets = [s["ret"] for s in stocks if s["ret"] is not None]
         realized_rets = [r["ret"] for r in realized if r["ret"] is not None]
         all_rets = active_rets + realized_rets
-        total_ret = sum(all_rets) / max(len(all_rets), 1) if all_rets else 0
+        total_ret = sum(all_rets) if all_rets else 0
 
         if stocks or realized:
             persons.append({
