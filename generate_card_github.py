@@ -86,7 +86,7 @@ def _font(bold=False, size=16):
 # 한국 종목: code.KS (코스피) 또는 code.KQ (코스닥)
 KOSDAQ_CODES = {
     "247540", "356860", "462350", "031330",  # 에코프로비엠, 티엘비, 이노스페이스, 에스에이엠티
-    "066970",  # 엘앤에프
+    # 066970(엘앤에프)는 야후파이낸스에서 .KS로 등록되어 있어 제외
 }
 
 def get_yahoo_price(market: str, code: str) -> float | None:
