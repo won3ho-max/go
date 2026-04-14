@@ -391,7 +391,6 @@ def generate_image(sheet_name: str, persons: list, today: datetime.date) -> str:
     for rank, p in enumerate(persons):
         y = render_person_detail(d, y, p, rank);        y += 3
     y += 10
-    y = render_upcoming(d, y, persons);                 y += 16
     y = render_footer(d, y)
     img = img.crop((0, 0, CARD_W, y))
     out = BASE_DIR / f"한탕_데일리_{today.strftime('%Y-%m-%d')}.png"
