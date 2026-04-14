@@ -1,0 +1,234 @@
+{
+  "date": "2026-04-15",
+  "sheet": "한탕(26년 2분기)",
+  "persons": [
+    {
+      "name": "안병열",
+      "stocks": [
+        {
+          "name": "RISE 삼성전자SK하이닉스채권혼합50 (0162Z0)",
+          "code": "0162Z0",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 9700.0,
+          "current_price": 10745.0,
+          "return_pct": 10.77,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "마이크론테크놀로지(MU)",
+          "code": "MU",
+          "market": "US",
+          "rec_date": "2026-04-06",
+          "base_price": 377.76,
+          "current_price": 465.66,
+          "return_pct": 23.27,
+          "sell_date": "2026-05-06"
+        },
+        {
+          "name": "세아제강지주",
+          "code": "003030",
+          "market": "KR",
+          "rec_date": "2026-04-13",
+          "base_price": null,
+          "current_price": null,
+          "return_pct": null,
+          "sell_date": "2026-05-13"
+        }
+      ],
+      "total_return": 17.02
+    },
+    {
+      "name": "김동환",
+      "stocks": [
+        {
+          "name": "암 홀딩스(ARM)",
+          "code": "ARM",
+          "market": "US",
+          "rec_date": "2026-03-30",
+          "base_price": 136.96,
+          "current_price": 161.22,
+          "return_pct": 17.71,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "카르만홀딩스(KRMN)",
+          "code": "KRMN",
+          "market": "US",
+          "rec_date": "2026-04-06",
+          "base_price": 86.1,
+          "current_price": 90.18,
+          "return_pct": 4.74,
+          "sell_date": "2026-05-06"
+        }
+      ],
+      "total_return": 11.23
+    },
+    {
+      "name": "이광훈",
+      "stocks": [
+        {
+          "name": "티엘비",
+          "code": "356860",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 66800.0,
+          "current_price": 79800.0,
+          "return_pct": 19.46,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "티엘비",
+          "code": "356860",
+          "market": "KR",
+          "rec_date": "2026-04-06",
+          "base_price": 67100.0,
+          "current_price": 79800.0,
+          "return_pct": 18.93,
+          "sell_date": "2026-05-06"
+        }
+      ],
+      "total_return": 19.2
+    },
+    {
+      "name": "송지호",
+      "stocks": [
+        {
+          "name": "엘앤에프",
+          "code": "066970",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 155900.0,
+          "current_price": 173400.0,
+          "return_pct": 11.23,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "HD건설기계",
+          "code": "267270",
+          "market": "KR",
+          "rec_date": "2026-04-06",
+          "base_price": 149000.0,
+          "current_price": 162800.0,
+          "return_pct": 9.26,
+          "sell_date": "2026-05-06"
+        }
+      ],
+      "total_return": 10.25
+    },
+    {
+      "name": "이원호",
+      "stocks": [
+        {
+          "name": "이노스페이스",
+          "code": "462350",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 15020.0,
+          "current_price": 16600.0,
+          "return_pct": 10.52,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "삼성SDI",
+          "code": "006400",
+          "market": "KR",
+          "rec_date": "2026-04-06",
+          "base_price": 453500.0,
+          "current_price": 470500.0,
+          "return_pct": 3.75,
+          "sell_date": "2026-05-06"
+        }
+      ],
+      "total_return": 7.13
+    },
+    {
+      "name": "김태완",
+      "stocks": [
+        {
+          "name": "TIGER 미국채10년선물 (305080)",
+          "code": "305080",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 13635.0,
+          "current_price": 13440.0,
+          "return_pct": -1.43,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "에코프로비엠",
+          "code": "247540",
+          "market": "KR",
+          "rec_date": "2026-04-06",
+          "base_price": 199900.0,
+          "current_price": 197800.0,
+          "return_pct": -1.05,
+          "sell_date": "2026-05-06"
+        }
+      ],
+      "total_return": -1.24
+    },
+    {
+      "name": "어정윤",
+      "stocks": [
+        {
+          "name": "삼성전자",
+          "code": "005930",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 176300.0,
+          "current_price": 206500.0,
+          "return_pct": 17.13,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "삼성전자",
+          "code": "005930",
+          "market": "KR",
+          "rec_date": "2026-04-06",
+          "base_price": 193100.0,
+          "current_price": 206500.0,
+          "return_pct": 6.94,
+          "sell_date": "2026-05-06"
+        }
+      ],
+      "total_return": 12.04
+    },
+    {
+      "name": "조형오",
+      "stocks": [
+        {
+          "name": "에스에이엠티",
+          "code": "031330",
+          "market": "KR",
+          "rec_date": "2026-03-30",
+          "base_price": 5040.0,
+          "current_price": 6530.0,
+          "return_pct": 29.56,
+          "sell_date": "2026-04-30"
+        },
+        {
+          "name": "한화비전",
+          "code": "489790",
+          "market": "KR",
+          "rec_date": "2026-04-06",
+          "base_price": 70900.0,
+          "current_price": 76900.0,
+          "return_pct": 8.46,
+          "sell_date": "2026-05-06"
+        },
+        {
+          "name": "동성화인텍",
+          "code": "033500",
+          "market": "KR",
+          "rec_date": "2026-04-13",
+          "base_price": null,
+          "current_price": null,
+          "return_pct": null,
+          "sell_date": "2026-05-13"
+        }
+      ],
+      "total_return": 19.01
+    }
+  ]
+}
