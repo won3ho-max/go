@@ -5,6 +5,12 @@ on:
     # 매일 오전 7시 KST = 전날 22:00 UTC (월~금)
     - cron: '0 22 * * 0-4'
   workflow_dispatch:
+    inputs:
+      test_mode:
+        description: '테스트 모드 (개인 텔레그램으로 발송)'
+        required: false
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -33,5 +39,5 @@ jobs:
           GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
           GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
           TELEGRAM_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID:    ${{ inputs.test_mode == true && '1633958343' || secrets.TELEGRAM_CHAT_ID }}
         run: python update_gsheets.py
