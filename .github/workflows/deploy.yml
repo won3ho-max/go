@@ -2,6 +2,8 @@ name: Deploy to news-bot
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'hantang/**'
 jobs:
   deploy:
     runs-on: ubuntu-latest

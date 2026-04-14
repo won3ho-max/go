@@ -6,6 +6,10 @@ on:
     - cron: '0 22 * * 0-4'
   workflow_dispatch:
 
+defaults:
+  run:
+    working-directory: hantang
+
 jobs:
   daily-report:
     runs-on: ubuntu-latest
