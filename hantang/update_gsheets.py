@@ -506,8 +506,13 @@ def run_card_and_telegram(today: datetime.date):
 
 
 # ── 메인 ────────────────────────────────────────────────────────────────
+def today_kst():
+    """KST(UTC+9) 기준 오늘 날짜"""
+    from datetime import timezone, timedelta
+    return datetime.datetime.now(timezone(timedelta(hours=9))).date()
+
 def main():
-    today = datetime.date.today()
+    today = today_kst()
     print(f"=== 한탕 스터디 Google Sheets 업데이트 ({today}) ===\n")
 
     ss = get_spreadsheet()

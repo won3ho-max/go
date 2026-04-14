@@ -209,111 +209,104 @@ def price_str(v, market):
 
 # ── 렌더러 (generate_card.py와 동일) ────────────────────────────────────
 def render_header(d, y, today, sheet_name):
-    H = 200
+    H = 130
     draw_rect(d, 0, y, CARD_W, y+H, BG_HEADER)
     d.rectangle([0, y+H-3, CARD_W, y+H], fill=RED)
-    tag_font = _font(bold=True, size=11)
-    tag_w = tag_font.getbbox("DAILY REPORT")[2] + 24
-    draw_rect(d, 36, y+36, 36+tag_w, y+56, RED, radius=2)
-    d.text((36+12, y+39), "DAILY REPORT", font=tag_font, fill=WHITE)
-    d.text((36, y+68), "한탕. 스터디", font=_font(bold=True, size=34), fill=WHITE)
-    d.text((36, y+116), sheet_name, font=_font(bold=True, size=13), fill=RED)
-    d.text((36, y+142), f"직전영업일 종가 기준  ·  {today.strftime('%Y.%m.%d')}",
-           font=_font(size=11), fill=GREY_TEXT)
+    tag_font = _font(bold=True, size=10)
+    tag_w = tag_font.getbbox("DAILY REPORT")[2] + 20
+    draw_rect(d, 24, y+18, 24+tag_w, y+34, RED, radius=2)
+    d.text((24+10, y+20), "DAILY REPORT", font=tag_font, fill=WHITE)
+    d.text((24, y+44), "한탕 스터디", font=_font(bold=True, size=28), fill=WHITE)
+    d.text((24, y+82), sheet_name, font=_font(bold=True, size=11), fill=RED)
+    d.text((24, y+100), f"직전영업일 종가 기준  ·  {today.strftime('%Y.%m.%d')}",
+           font=_font(size=10), fill=GREY_TEXT)
     return y + H
 
 def render_section_title(d, y, label, subtitle):
-    H = 52
+    H = 40
     draw_rect(d, 0, y, CARD_W, y+H, BG_CARD)
-    d.rectangle([0, y+10, 4, y+H-10], fill=RED)
-    d.text((36, y+8),  label,    font=_font(bold=True, size=11), fill=RED)
-    d.text((36, y+24), subtitle, font=_font(bold=True, size=18), fill=WHITE)
+    d.rectangle([0, y+8, 3, y+H-8], fill=RED)
+    d.text((24, y+6),  label,    font=_font(bold=True, size=10), fill=RED)
+    d.text((24, y+20), subtitle, font=_font(bold=True, size=15), fill=WHITE)
     return y + H
 
 def render_ranking(d, y, persons):
     RANK_COLORS = [GOLD, SILVER, BRONZE]
     max_abs = max(abs(p["total_ret"]) for p in persons) if persons else 1
-    ROW_H, PAD = 64, 36
-    draw_rect(d, 0, y, CARD_W, y + len(persons)*ROW_H + 16, BG_CARD)
+    ROW_H, PAD = 36, 24
+    draw_rect(d, 0, y, CARD_W, y + len(persons)*ROW_H + 10, BG_CARD)
     for i, p in enumerate(persons):
-        ry = y + 8 + i * ROW_H
+        ry = y + 5 + i * ROW_H
         if i > 0:
             d.line([PAD, ry, CARD_W-PAD, ry], fill=GREY_BORDER, width=1)
-        cx, cy = PAD+16, ry+10+16
+        # 순위 원
+        cx, cy = PAD+12, ry+ROW_H//2
         rc = RANK_COLORS[i] if i < 3 else GREY_DIM
         fc = (0,0,0) if i < 3 else GREY_TEXT
-        d.ellipse([cx-14, cy-14, cx+14, cy+14], fill=rc)
+        d.ellipse([cx-11, cy-11, cx+11, cy+11], fill=rc)
         rn = str(i+1)
-        rf = _font(bold=True, size=12)
+        rf = _font(bold=True, size=11)
         rb = rf.getbbox(rn)
         d.text((cx-(rb[2]-rb[0])//2, cy-(rb[3]-rb[1])//2-1), rn, font=rf, fill=fc)
-        d.text((PAD+38, ry+10), p["person"], font=_font(bold=True, size=15), fill=WHITE)
-        all_items = [(s['short'][:8], s['ret']) for s in p["stocks"]] + \
-                    [(r['short'][:8], r['ret']) for r in p.get("realized", [])]
-        summary = "  ·  ".join(f"{n} {pct_str(r)}" for n, r in all_items)
-        d.text((PAD+38, ry+30), summary, font=_font(size=10), fill=GREY_TEXT)
+        # 이름
+        d.text((PAD+30, ry+8), p["person"], font=_font(bold=True, size=14), fill=WHITE)
+        # 수익률 + 바
         ret = p["total_ret"]
         ret_color = GREEN if ret >= 0 else RED
-        draw_text_right(d, CARD_W-PAD, ry+10, pct_str(ret), _font(bold=True, size=17), ret_color)
-        bar_x0, bar_y = PAD+38, ry+48
-        bar_w_max = CARD_W - PAD - 130 - bar_x0
-        bar_w = int(bar_w_max * min(abs(ret)/max(max_abs, 0.01), 1.0))
-        draw_rect(d, bar_x0, bar_y, bar_x0+bar_w_max, bar_y+5, GREY_DIM, radius=2)
-        if bar_w > 0:
-            draw_rect(d, bar_x0, bar_y, bar_x0+bar_w, bar_y+5, ret_color, radius=2)
-    return y + len(persons)*ROW_H + 16
+        draw_text_right(d, CARD_W-PAD, ry+8, pct_str(ret), _font(bold=True, size=14), ret_color)
+    return y + len(persons)*ROW_H + 10
 
 def render_person_detail(d, y, person_data, rank):
     p = person_data
+    PAD = 24
     rank_color = [GOLD, SILVER, BRONZE][rank] if rank < 3 else GREY_TEXT
-    HDR_H = 44
+    HDR_H = 34
     draw_rect(d, 0, y, CARD_W, y+HDR_H, BG_CARD)
     d.line([0, y+HDR_H-1, CARD_W, y+HDR_H-1], fill=GREY_BORDER, width=1)
     rank_str = f"{rank+1}위"
-    d.text((36, y+12), rank_str, font=_font(bold=True, size=11), fill=rank_color)
-    rw = _font(bold=True, size=11).getbbox(rank_str)[2] + 10
-    d.text((36+rw, y+10), p["person"], font=_font(bold=True, size=17), fill=WHITE)
+    d.text((PAD, y+8), rank_str, font=_font(bold=True, size=10), fill=rank_color)
+    rw = _font(bold=True, size=10).getbbox(rank_str)[2] + 8
+    d.text((PAD+rw, y+6), p["person"], font=_font(bold=True, size=15), fill=WHITE)
     total_color = GREEN if p["total_ret"] >= 0 else RED
-    draw_text_right(d, CARD_W-36, y+11, pct_str(p["total_ret"]), _font(bold=True, size=18), total_color)
+    draw_text_right(d, CARD_W-PAD, y+7, pct_str(p["total_ret"]), _font(bold=True, size=15), total_color)
     y += HDR_H
     for si, s in enumerate(p["stocks"]):
-        ROW_H = 56
+        ROW_H = 44
         draw_rect(d, 0, y, CARD_W, y+ROW_H, BG_CARD)
         if si > 0:
-            d.line([36, y, CARD_W-36, y], fill=GREY_BORDER, width=1)
+            d.line([PAD, y, CARD_W-PAD, y], fill=GREY_BORDER, width=1)
         badge_bg   = BLUE_BADGE if s["market"] == "KR" else PINK_BADGE
         badge_text = BLUE_TEXT  if s["market"] == "KR" else PINK_TEXT
-        draw_rect(d, 36, y+15, 70, y+29, badge_bg, radius=3)
-        bfont = _font(bold=True, size=9)
+        draw_rect(d, PAD, y+8, PAD+30, y+20, badge_bg, radius=2)
+        bfont = _font(bold=True, size=8)
         bb = bfont.getbbox(s["market"])
-        d.text((36+(34-(bb[2]-bb[0]))//2, y+17), s["market"], font=bfont, fill=badge_text)
-        d.text((80, y+10), s["short"][:22], font=_font(bold=True, size=13), fill=WHITE)
-        meta = f"추천 {s['rec_date'][5:]}  ·  기준 {price_str(s['base'], s['market'])}"
-        d.text((80, y+30), meta, font=_font(size=10), fill=GREY_TEXT)
+        d.text((PAD+(30-(bb[2]-bb[0]))//2, y+9), s["market"], font=bfont, fill=badge_text)
+        d.text((PAD+36, y+5), s["short"][:20], font=_font(bold=True, size=12), fill=WHITE)
+        meta = f"{s['rec_date'][5:]}  ·  {price_str(s['base'], s['market'])}"
+        d.text((PAD+36, y+23), meta, font=_font(size=9), fill=GREY_TEXT)
         ret_color = GREEN if (s["ret"] or 0) >= 0 else RED
-        draw_text_right(d, CARD_W-36, y+10, price_str(s["current"], s["market"]), _font(size=13), WHITE_DIM)
-        draw_text_right(d, CARD_W-36, y+30, pct_str(s["ret"]), _font(bold=True, size=15), ret_color)
+        draw_text_right(d, CARD_W-PAD, y+5, price_str(s["current"], s["market"]), _font(size=11), WHITE_DIM)
+        draw_text_right(d, CARD_W-PAD, y+23, pct_str(s["ret"]), _font(bold=True, size=13), ret_color)
         y += ROW_H
 
-    # ── 실현 종목 표시 ─────────────────────────────────────
+    # ── 실현 종목 ─────────────────────────────────────
+    SOLD_BG = (58, 36, 26)
+    SOLD_TEXT = (255, 160, 80)
     for ri, r in enumerate(p.get("realized", [])):
-        ROW_H = 56
+        ROW_H = 44
         draw_rect(d, 0, y, CARD_W, y+ROW_H, BG_CARD)
-        d.line([36, y, CARD_W-36, y], fill=GREY_BORDER, width=1)
-        # 매도 배지
-        SOLD_BG = (58, 36, 26)
-        SOLD_TEXT = (255, 160, 80)
-        draw_rect(d, 36, y+15, 70, y+29, SOLD_BG, radius=3)
-        bfont = _font(bold=True, size=9)
+        d.line([PAD, y, CARD_W-PAD, y], fill=GREY_BORDER, width=1)
+        draw_rect(d, PAD, y+8, PAD+30, y+20, SOLD_BG, radius=2)
+        bfont = _font(bold=True, size=8)
         bb = bfont.getbbox("매도")
-        d.text((36+(34-(bb[2]-bb[0]))//2, y+17), "매도", font=bfont, fill=SOLD_TEXT)
-        d.text((80, y+10), shorten_name(r["name"])[:22], font=_font(bold=True, size=13), fill=(120, 120, 140))
+        d.text((PAD+(30-(bb[2]-bb[0]))//2, y+9), "매도", font=bfont, fill=SOLD_TEXT)
+        d.text((PAD+36, y+5), shorten_name(r["name"])[:20], font=_font(bold=True, size=12), fill=(120, 120, 140))
         sell_dt = r.get("sell_date", "")
-        meta = f"매도 {sell_dt[5:] if sell_dt else ''}  ·  기준 {price_str(r['base'], 'KR')}"
-        d.text((80, y+30), meta, font=_font(size=10), fill=GREY_TEXT)
+        meta = f"매도 {sell_dt[5:] if sell_dt else ''}  ·  {price_str(r['base'], 'KR')}"
+        d.text((PAD+36, y+23), meta, font=_font(size=9), fill=GREY_TEXT)
         ret_color = GREEN if (r["ret"] or 0) >= 0 else RED
-        draw_text_right(d, CARD_W-36, y+10, price_str(r.get("sell_price", 0), "KR"), _font(size=13), (120, 120, 140))
-        draw_text_right(d, CARD_W-36, y+30, pct_str(r["ret"]), _font(bold=True, size=15), ret_color)
+        draw_text_right(d, CARD_W-PAD, y+5, price_str(r.get("sell_price", 0), "KR"), _font(size=11), (120, 120, 140))
+        draw_text_right(d, CARD_W-PAD, y+23, pct_str(r["ret"]), _font(bold=True, size=13), ret_color)
         y += ROW_H
 
     return y
@@ -362,15 +355,13 @@ def render_upcoming(d, y, persons):
     return y + 28
 
 def render_footer(d, y):
-    H = 72
+    H = 44
     draw_rect(d, 0, y, CARD_W, y+H, (12, 12, 20))
-    d.rectangle([0, y, CARD_W, y+3], fill=RED)
-    d.text((CARD_W//2, y+16), "한탕 스터디 데일리 리포트",
-           font=_font(bold=True, size=12), fill=(50,50,70), anchor="mm")
-    d.text((CARD_W//2, y+36), "매일 오전 7:00 자동 업데이트  |  KRX · NYSE",
-           font=_font(size=10), fill=(40,40,56), anchor="mm")
-    d.text((CARD_W//2, y+52), "한국 Yahoo Finance  ·  미국 Yahoo Finance",
-           font=_font(size=10), fill=(35,35,50), anchor="mm")
+    d.rectangle([0, y, CARD_W, y+2], fill=RED)
+    d.text((CARD_W//2, y+12), "한탕 스터디  ·  매일 오전 7:00 자동 업데이트",
+           font=_font(size=9), fill=(50,50,70), anchor="mm")
+    d.text((CARD_W//2, y+28), "KRX · NYSE  |  Yahoo Finance",
+           font=_font(size=9), fill=(40,40,56), anchor="mm")
     return y + H
 
 # ── 이미지 생성 ──────────────────────────────────────────────────────────
@@ -416,8 +407,13 @@ def send_telegram(image_path: str, today: datetime.date):
         print(f"  텔레그램 {'✅' if r.ok else '❌'} (chat_id={cid})")
 
 # ── 메인 ────────────────────────────────────────────────────────────────
+def today_kst():
+    """KST(UTC+9) 기준 오늘 날짜"""
+    from datetime import timezone, timedelta
+    return datetime.datetime.now(timezone(timedelta(hours=9))).date()
+
 if __name__ == "__main__":
-    today = datetime.date.today()
+    today = today_kst()
     print(f"=== 한탕 데일리 리포트 생성 ({today}) ===")
     sheet_name, persons = load_portfolio()
     print(f"  포트폴리오 로드: {len(persons)}명")
