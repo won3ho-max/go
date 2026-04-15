@@ -1,0 +1,48 @@
+name: 수동 매도 처리
+
+on:
+  workflow_dispatch:
+    inputs:
+      person:
+        description: '매도 대상자 이름'
+        required: true
+        type: string
+      stock:
+        description: '매도 종목명 (시트에 적힌 그대로)'
+        required: true
+        type: string
+      sell_date:
+        description: '매도일 (YYYY-MM-DD)'
+        required: true
+        type: string
+      sell_price:
+        description: '매도가 (숫자만)'
+        required: true
+        type: string
+
+defaults:
+  run:
+    working-directory: hantang
+
+jobs:
+  sell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install --quiet gspread google-auth
+
+      - name: 매도 처리
+        env:
+          GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
+          GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
+          SELL_PERSON:         ${{ inputs.person }}
+          SELL_STOCK:          ${{ inputs.stock }}
+          SELL_DATE:           ${{ inputs.sell_date }}
+          SELL_PRICE:          ${{ inputs.sell_price }}
+        run: python manual_sell.py
