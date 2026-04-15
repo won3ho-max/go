@@ -145,6 +145,33 @@ def fetch_weather_seoul() -> dict | None:
         print(f"  [날씨 조회 실패] {e}")
         return None
 
+# ── 시장 지표 조회 (Yahoo Finance) ────────────────────────────────────────
+def fetch_market_data() -> list:
+    """KOSPI, KOSDAQ(전일), S&P500, NASDAQ(당일), USD/KRW 환율 조회"""
+    tickers = {
+        "^KS11":    ("KOSPI",   "전일"),
+        "^KQ11":    ("KOSDAQ",  "전일"),
+        "^GSPC":    ("S&P 500", ""),
+        "^IXIC":    ("NASDAQ",  ""),
+        "KRW=X":    ("USD/KRW", ""),
+    }
+    results = []
+    for symbol, (name, tag) in tickers.items():
+        try:
+            t = yf.Ticker(symbol)
+            hist = t.history(period="5d", prepost=False)
+            if len(hist) >= 2:
+                cur  = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+                chg  = (cur - prev) / prev
+                results.append({"name": name, "tag": tag, "price": cur, "change": chg})
+            elif len(hist) == 1:
+                cur = float(hist["Close"].iloc[0])
+                results.append({"name": name, "tag": tag, "price": cur, "change": None})
+        except Exception as e:
+            print(f"  [지표 조회 실패] {symbol}: {e}")
+    return results
+
 # ── 포트폴리오 로드 ─────────────────────────────────────────────────────
 def load_portfolio(skip_price_refresh=False):
     path = BASE_DIR / "portfolio.json"
@@ -260,9 +287,10 @@ def render_header(d, today, sheet_name, weather):
     d.text((32, 55), date_str, font=_font(size=14), fill=(150, 155, 175))
     if weather:
         wx = CARD_W - 32
-        text_right(d, wx, 18, f"서울  {weather['desc']}  {weather['temp']}C",
-                   _font(bold=True, size=18), WHITE)
-        text_right(d, wx, 48,
+        text_right(d, wx, 8, "오늘의 날씨", _font(bold=True, size=10), (100, 110, 140))
+        text_right(d, wx, 26, f"서울  {weather['desc']}  {weather['temp']}C",
+                   _font(bold=True, size=20), WHITE)
+        text_right(d, wx, 56,
                    f"최고 {weather['high']} / 최저 {weather['low']}  습도 {weather['humidity']}%",
                    _font(size=12), (150, 155, 175))
     d.rectangle([0, 90, CARD_W, 93], fill=RED)
@@ -350,6 +378,49 @@ def render_person_card(d, person, rank, x, y, w, h):
         text_right(d, x+w-12, iy+3, pct_str(item.get("ret")),
                    _font(bold=True, size=13), pct_color(item.get("ret")))
 
+# ── 시장 지표 패널 (랭킹 아래) ────────────────────────────────────────────
+def render_market_panel(d, market_data, x0, y0, w, h):
+    draw_rounded_rect(d, x0, y0, x0+w, y0+h, BG_CARD, radius=12, outline=GREY_BORDER)
+    d.rectangle([x0, y0+12, x0+4, y0+36], fill=(13, 110, 253))
+    d.text((x0+16, y0+10), "MARKET", font=_font(bold=True, size=11), fill=(13, 110, 253))
+    d.text((x0+16, y0+26), "시장 지표", font=_font(bold=True, size=18), fill=DARK)
+
+    if not market_data:
+        d.text((x0+16, y0+58), "데이터 조회 실패", font=_font(size=12), fill=GREY_TEXT)
+        return
+
+    ROW_H = 38
+    sy = y0 + 56
+    for i, m in enumerate(market_data):
+        ry = sy + i * ROW_H
+        if ry + ROW_H > y0 + h - 4:
+            break
+        if i > 0:
+            d.line([x0+16, ry, x0+w-16, ry], fill=GREY_BORDER, width=1)
+
+        # 이름 + 태그
+        d.text((x0+16, ry+6), m["name"], font=_font(bold=True, size=14), fill=DARK)
+        if m["tag"]:
+            nw = _font(bold=True, size=14).getbbox(m["name"])[2] + 6
+            d.text((x0+16+nw, ry+9), m["tag"], font=_font(size=9), fill=GREY_TEXT)
+
+        # 가격
+        price = m["price"]
+        is_fx = "USD" in m["name"]
+        if is_fx:
+            price_text = f"{price:,.1f}"
+        elif price > 10000:
+            price_text = f"{price:,.0f}"
+        else:
+            price_text = f"{price:,.2f}"
+        text_right(d, x0+w-16, ry+4, price_text, _font(bold=True, size=15), DARK)
+
+        # 등락률
+        chg = m.get("change")
+        if chg is not None:
+            chg_str = f"+{chg*100:.2f}%" if chg >= 0 else f"{chg*100:.2f}%"
+            text_right(d, x0+w-16, ry+22, chg_str, _font(bold=True, size=11), pct_color(chg))
+
 # ── 푸터 ────────────────────────────────────────────────────────────────
 def render_footer(d, y):
     d.line([32, y, CARD_W-32, y], fill=GREY_BORDER, width=1)
@@ -362,16 +433,35 @@ def generate_image(sheet_name: str, persons: list, today: datetime.date) -> str:
     weather = fetch_weather_seoul()
     if weather:
         print(f"  날씨: 서울 {weather['desc']} {weather['temp']}C")
+
+    # 시장 지표 조회
+    market_data = fetch_market_data()
+    print(f"  시장 지표: {len(market_data)}건")
+
     img = Image.new("RGB", (CARD_W, CARD_H), BG)
     d   = ImageDraw.Draw(img)
     render_header(d, today, sheet_name, weather)
+
     content_y = 108
     content_h = CARD_H - content_y - 40
     ranking_w = 340
-    render_ranking_panel(d, persons, 24, content_y, ranking_w, content_h)
-    grid_x = 24 + ranking_w + 16
+    left_x = 24
+
+    # 랭킹 패널 (상단)
+    ranking_h = 58 + len(persons) * 52 + 12  # 헤더 + 행들 + 패딩
+    render_ranking_panel(d, persons, left_x, content_y, ranking_w, ranking_h)
+
+    # 시장 지표 패널 (랭킹 아래)
+    market_y = content_y + ranking_h + 12
+    market_h = content_y + content_h - market_y
+    if market_h > 80:
+        render_market_panel(d, market_data, left_x, market_y, ranking_w, market_h)
+
+    # 우측: 포트폴리오 그리드
+    grid_x = left_x + ranking_w + 16
     grid_w = CARD_W - grid_x - 24
     render_portfolio_grid(d, persons, grid_x, content_y, grid_w, content_h)
+
     render_footer(d, CARD_H - 32)
     out = BASE_DIR / f"한탕_데일리_{today.strftime('%Y-%m-%d')}.png"
     img.save(str(out), "PNG", optimize=True)
