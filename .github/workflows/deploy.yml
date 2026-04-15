@@ -24,8 +24,9 @@ jobs:
           git checkout origin/main -- news_bot/main.py
           git checkout origin/main -- news_bot/collector.py
 
-          # 2. 텔레그램 봇 토큰 업데이트
+          # 2. 텔레그램 설정 업데이트
           sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|" ~/news_bot/news_bot/.env
+          sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=1633958343|" ~/news_bot/news_bot/.env
 
           # 3. systemd 서비스 파일 생성
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
@@ -44,7 +45,5 @@ jobs:
           # 6. 검증
           sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
           grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
-          echo "=== .env 토큰 확인 ==="
-          grep 'TELEGRAM_BOT_TOKEN' ~/news_bot/news_bot/.env | cut -c1-40
-          echo "=== 최근 봇 로그 ==="
-          tail -20 ~/bot.log 2>/dev/null || echo "로그 없음"
+          ps aux | grep -v grep | grep 'won3ho.*python' || echo "none"
+          ENDSSH
