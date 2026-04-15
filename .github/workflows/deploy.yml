@@ -17,40 +17,25 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
           set -e
-
-          # 1. 코드 업데이트
           cd ~/news_bot
           git fetch origin main
           git checkout origin/main -- news_bot/main.py
           git checkout origin/main -- news_bot/collector.py
-
-          # 2. 텔레그램 설정 업데이트
           sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|" ~/news_bot/news_bot/.env
           sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=1633958343|" ~/news_bot/news_bot/.env
-
-          # 3. systemd 서비스 파일 생성
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
-
-          # 4. 우리 봇만 타겟 종료
           sudo systemctl stop news_bot 2>/dev/null || true
           pkill -9 -f 'news_bot/news_bot/main.py' 2>/dev/null || true
           sleep 2
-
-          # 5. systemd 서비스 재시작
           sudo systemctl daemon-reload
           sudo systemctl enable news_bot
           sudo systemctl restart news_bot
-          sleep 5
-
-          # 6. 텔레그램 직접 테스트
-          python3 /tmp/tgtest.py || true
-
-          # 7. 검증
+          sleep 3
           sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
           ENDSSH
 
-      - name: Telegram test
+      - name: Send test message
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 "
-          python3 -c \"
-import requests,
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=1633958343" \
+            -d "text=배포+완료+테스트"
