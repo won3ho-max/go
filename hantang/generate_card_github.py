@@ -354,13 +354,14 @@ def render_person_card(d, person, rank, x, y, w, h):
     ret = person["total_ret"]
     ret_color = WHITE if rank < 3 else pct_color(ret)
     text_right(d, x+w-12, y+6, pct_str(ret), _font(bold=True, size=17), ret_color)
-    sy = y + hdr_h + 6
+    sy = y + hdr_h + 4
     all_items = person["stocks"] + person.get("realized", [])
-    item_h = min(28, (h - hdr_h - 12) // max(len(all_items), 1))
+    item_h = min(48, (h - hdr_h - 10) // max(len(all_items), 1))
     for j, item in enumerate(all_items):
         iy = sy + j * item_h
-        if iy + item_h > y + h - 4:
+        if iy + item_h > y + h - 2:
             break
+
         is_sold = item.get("status") == "sold"
         if is_sold:
             badge_bg, badge_text, badge_label = (255, 237, 219), SOLD_BADGE, "매도"
@@ -368,6 +369,12 @@ def render_person_card(d, person, rank, x, y, w, h):
             badge_bg, badge_text, badge_label = (219, 234, 254), BLUE_BADGE, "KR"
         else:
             badge_bg, badge_text, badge_label = (248, 219, 237), PINK_BADGE, "US"
+
+        # 구분선
+        if j > 0:
+            d.line([x+10, iy, x+w-10, iy], fill=GREY_BORDER, width=1)
+
+        # 1행: 뱃지 + 종목명 + 수익률
         draw_rounded_rect(d, x+10, iy+4, x+40, iy+19, badge_bg, radius=3)
         bf = _font(bold=True, size=9)
         bb = bf.getbbox(badge_label)
@@ -377,6 +384,17 @@ def render_person_card(d, person, rank, x, y, w, h):
                font=_font(medium=True, size=12), fill=GREY_TEXT if is_sold else DARK_SUB)
         text_right(d, x+w-12, iy+3, pct_str(item.get("ret")),
                    _font(bold=True, size=13), pct_color(item.get("ret")))
+
+        # 2행: 추천일 · 기준가 → 현재가 (or 매도가)
+        if item_h >= 38:
+            rec = item.get("rec_date", "")
+            rec_short = rec[5:] if rec and len(rec) >= 10 else rec
+            mkt = item.get("market", "KR")
+            if is_sold:
+                meta = f"{rec_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('sell_price',0), mkt)}"
+            else:
+                meta = f"{rec_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('current',0), mkt)}"
+            d.text((x+46, iy+22), meta, font=_font(size=10), fill=GREY_TEXT)
 
 # ── 시장 지표 패널 (랭킹 아래) ────────────────────────────────────────────
 def render_market_panel(d, market_data, x0, y0, w, h):
