@@ -16,6 +16,7 @@ GitHub Actions에서 로컬 컴퓨터 없이 실행 가능
 """
 
 import os, sys, re, json, datetime, subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def _ensure(pkg, import_name=None):
     try:
@@ -119,6 +120,20 @@ def fetch_price(market: str, code: str, date: datetime.date | None = None) -> fl
         print(f"    [가격 조회 실패] {code}: {e}")
         return None
 
+
+def prefetch_prices(jobs: list[tuple[str, str, datetime.date | None]]):
+    """병렬로 주가를 미리 조회해서 캐시에 채운다."""
+    unique = {(m, c, str(d)): (m, c, d) for m, c, d in jobs
+              if (m, c, str(d)) not in _yf_cache}
+    if not unique:
+        return
+    print(f"  병렬 주가 조회: {len(unique)}건...")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {pool.submit(fetch_price, m, c, d): (m, c, d)
+                for (m, c, d) in unique.values()}
+        for f in as_completed(futs):
+            pass  # fetch_price가 알아서 캐시에 저장
+
 # ── 종목명 파싱 ──────────────────────────────────────────────────────────
 def parse_stock(name: str):
     name = str(name).strip()
@@ -185,6 +200,31 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
     blocks   = find_person_blocks(all_values)
     updates  = []   # (row, col, value) 배치 업데이트용
     updated, sold, skipped = [], [], []
+
+    # ── 병렬 주가 조회를 위한 사전 스캔 ────────────────────────────────
+    price_jobs = []
+    for block in blocks:
+        for row_1 in range(block["row_start"], block["row_end"] + 1):
+            idx = row_1 - 1
+            if idx >= len(all_values):
+                continue
+            row_data = all_values[idx]
+            name = row_data[9] if len(row_data) > 9 else ""
+            rec_date_s = row_data[10] if len(row_data) > 10 else ""
+            if not name or not isinstance(name, str) or not name.strip():
+                continue
+            market, code = parse_stock(name.strip())
+            if not market:
+                continue
+            price_jobs.append((market, code, None))
+            try:
+                rec_date = datetime.date.fromisoformat(rec_date_s[:10])
+                sell_date = calc_sell_date(rec_date, market)
+                if sell_date <= today:
+                    price_jobs.append((market, code, sell_date))
+            except Exception:
+                pass
+    prefetch_prices(price_jobs)
 
     for block in blocks:
         person    = block["person"]
@@ -301,8 +341,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
         print(f"  배치 업데이트: {len(updates)}셀")
         cell_list = []
         for row_1, col_1, val in updates:
-            c = ws.cell(row_1, col_1)
-            c.value = val
+            c = gspread.Cell(row=row_1, col=col_1, value=val)
             cell_list.append(c)
         ws.update_cells(cell_list, value_input_option="USER_ENTERED")
 
@@ -374,8 +413,7 @@ def process_pending(ws: gspread.Worksheet, all_values: list, today: datetime.dat
     if updates:
         cell_list = []
         for row_1, col_1, val in updates:
-            c = ws.cell(row_1, col_1)
-            c.value = val
+            c = gspread.Cell(row=row_1, col=col_1, value=val)
             cell_list.append(c)
         ws.update_cells(cell_list, value_input_option="USER_ENTERED")
         pending_path.write_text("[]", encoding="utf-8")
@@ -498,7 +536,7 @@ def run_card_and_telegram(today: datetime.date):
         mod  = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         sheet_name = json.loads((BASE_DIR / "portfolio.json").read_text())["sheet"]
-        persons = mod.load_portfolio()[1]  # 가격 갱신 포함
+        persons = mod.load_portfolio(skip_price_refresh=True)[1]  # 이미 갱신된 가격 사용
         card_path = mod.generate_image(sheet_name, persons, today)
         mod.send_telegram(card_path, today)
     except Exception as e:
@@ -523,10 +561,11 @@ def main():
     all_values = ws.get_all_values()
 
     # 1. 대기 종목 추가
-    process_pending(ws, all_values, today)
+    added = process_pending(ws, all_values, today)
 
     # 2. 현재가 업데이트 + 자동 매도
-    all_values = ws.get_all_values()   # pending 반영 후 재로드
+    if added:
+        all_values = ws.get_all_values()   # pending 반영 시에만 재로드
     updated, sold, skipped = process_sheet(ws, today)
 
     print("\n" + "="*50)

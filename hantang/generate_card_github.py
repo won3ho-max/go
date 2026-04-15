@@ -106,7 +106,12 @@ def get_yahoo_price(market: str, code: str) -> float | None:
     return None
 
 # ── 포트폴리오 로드 + 가격 갱신 ────────────────────────────────────────
-def load_portfolio():
+def load_portfolio(skip_price_refresh=False):
+    """
+    포트폴리오 로드.
+    skip_price_refresh=True면 portfolio.json의 가격을 그대로 사용 (update_gsheets에서 호출 시).
+    단독 실행 시에는 False로 Yahoo Finance 갱신.
+    """
     path = BASE_DIR / "portfolio.json"
     if not path.exists():
         raise FileNotFoundError("portfolio.json 없음 - 로컬에서 먼저 실행해주세요")
@@ -126,9 +131,11 @@ def load_portfolio():
             if not market or not code:
                 continue
 
-            # 현재가 갱신
-            cur_price = get_yahoo_price(market, code)
             base_price = s.get("base_price")
+            if skip_price_refresh:
+                cur_price = s.get("current_price")
+            else:
+                cur_price = get_yahoo_price(market, code)
 
             ret = None
             if base_price and cur_price:
