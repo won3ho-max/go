@@ -145,31 +145,50 @@ def fetch_weather_seoul() -> dict | None:
         print(f"  [날씨 조회 실패] {e}")
         return None
 
-# ── 시장 지표 조회 (Yahoo Finance) ────────────────────────────────────────
+# ── 시장 지표 조회 ───────────────────────────────────────────────────────
+def _fetch_naver_index(code: str, name: str, tag: str) -> dict | None:
+    """네이버 금융 API로 한국 지수 조회 (실시간 정확도)"""
+    try:
+        url = f"https://m.stock.naver.com/api/index/{code}/basic"
+        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        price = float(data["closePrice"].replace(",", ""))
+        ratio = float(data["fluctuationsRatio"]) / 100
+        direction = data["compareToPreviousPrice"]["code"]  # 2=상승, 5=하락
+        if direction == "5":
+            ratio = -abs(ratio)
+        return {"name": name, "tag": tag, "price": price, "change": ratio}
+    except Exception as e:
+        print(f"  [네이버 지수 실패] {code}: {e}")
+        return None
+
+def _fetch_yahoo_index(symbol: str, name: str, tag: str) -> dict | None:
+    """Yahoo Finance로 미국 지수/환율 조회"""
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="5d", prepost=False)
+        if len(hist) >= 2:
+            cur  = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2])
+            chg  = (cur - prev) / prev
+            return {"name": name, "tag": tag, "price": cur, "change": chg}
+    except Exception as e:
+        print(f"  [Yahoo 지수 실패] {symbol}: {e}")
+    return None
+
 def fetch_market_data() -> list:
-    """KOSPI, KOSDAQ(전일), S&P500, NASDAQ(당일), USD/KRW 환율 조회"""
-    tickers = {
-        "^KS11":    ("KOSPI",   "전일"),
-        "^KQ11":    ("KOSDAQ",  "전일"),
-        "^GSPC":    ("S&P 500", ""),
-        "^IXIC":    ("NASDAQ",  ""),
-        "KRW=X":    ("USD/KRW", ""),
-    }
+    """KOSPI/KOSDAQ(네이버), S&P500/NASDAQ/USD-KRW(Yahoo) 조회"""
     results = []
-    for symbol, (name, tag) in tickers.items():
-        try:
-            t = yf.Ticker(symbol)
-            hist = t.history(period="5d", prepost=False)
-            if len(hist) >= 2:
-                cur  = float(hist["Close"].iloc[-1])
-                prev = float(hist["Close"].iloc[-2])
-                chg  = (cur - prev) / prev
-                results.append({"name": name, "tag": tag, "price": cur, "change": chg})
-            elif len(hist) == 1:
-                cur = float(hist["Close"].iloc[0])
-                results.append({"name": name, "tag": tag, "price": cur, "change": None})
-        except Exception as e:
-            print(f"  [지표 조회 실패] {symbol}: {e}")
+    # 한국 지수: 네이버 (정확도 높음)
+    for code, name, tag in [("KOSPI", "KOSPI", "전일"), ("KOSDAQ", "KOSDAQ", "전일")]:
+        r = _fetch_naver_index(code, name, tag)
+        if r:
+            results.append(r)
+    # 미국 지수 + 환율: Yahoo Finance
+    for sym, name, tag in [("^GSPC", "S&P 500", ""), ("^IXIC", "NASDAQ", ""), ("KRW=X", "USD/KRW", "")]:
+        r = _fetch_yahoo_index(sym, name, tag)
+        if r:
+            results.append(r)
     return results
 
 # ── 포트폴리오 로드 ─────────────────────────────────────────────────────
