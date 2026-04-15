@@ -21,7 +21,7 @@ jobs:
           git fetch origin main
           git checkout origin/main -- news_bot/main.py
           git checkout origin/main -- news_bot/collector.py
-          sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|" ~/news_bot/news_bot/.env
+          sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.NH_BOT_TOKEN }}|" ~/news_bot/news_bot/.env
           sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=1633958343|" ~/news_bot/news_bot/.env
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
           sudo systemctl stop news_bot 2>/dev/null || true
@@ -36,6 +36,6 @@ jobs:
 
       - name: Send test message
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.NH_BOT_TOKEN }}/sendMessage" \
             -d "chat_id=1633958343" \
             -d "text=배포+완료+테스트"
