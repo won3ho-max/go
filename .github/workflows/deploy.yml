@@ -42,16 +42,16 @@ jobs:
           sudo systemctl restart news_bot
           sleep 3
 
-# 6. 검증
-          sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
-          grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
-          echo "=== 텔레그램 직접 메시지 테스트 ==="
-          python3 -c "
-import requests
-token = open('/home/won3ho/news_bot/news_bot/.env').read()
-import re
-t = re.search(r'TELEGRAM_BOT_TOKEN=(\S+)', token).group(1)
-c = re.search(r'TELEGRAM_CHAT_ID=(\S+)', token).group(1)
-r = requests.post(f'https://api.telegram.org/bot{t}/sendMessage', json={'chat_id': c, 'text': '테스트 메시지'}, timeout=10)
-print('STATUS:', r.status_code, r.json().get('ok'), r.json().get('description',''))
+          # 6. 검증
+                    sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
+                    grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
+                    echo "=== 텔레그램 직접 메시지 테스트 ==="
+                    python3 -c "
+          import requests
+          token = open('/home/won3ho/news_bot/news_bot/.env').read()
+          import re
+          t = re.search(r'TELEGRAM_BOT_TOKEN=(\S+)', token).group(1)
+          c = re.search(r'TELEGRAM_CHAT_ID=(\S+)', token).group(1)
+          r = requests.post(f'https://api.telegram.org/bot{t}/sendMessage', json={'chat_id': c, 'text': '테스트 메시지'}, timeout=10)
+          print('STATUS:', r.status_code, r.json().get('ok'), r.json().get('description',''))
 "
