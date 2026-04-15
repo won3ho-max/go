@@ -2,8 +2,8 @@ name: 한탕 스터디 데일리 리포트
 
 on:
   schedule:
-    # 매일 오전 7시 KST = 전날 22:00 UTC (월~금)
-    - cron: '0 22 * * 0-4'
+    # 매일 오전 7시 KST = 전날 22:00 UTC (일~목 = 월~금 아침)
+    - cron: '0 22 * * 0-4'  # re-enable schedule
   workflow_dispatch:
     inputs:
       test_mode:
