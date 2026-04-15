@@ -44,4 +44,7 @@ jobs:
           # 6. 검증
           sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
           grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
-          ENDSSH
+          echo "=== .env 토큰 확인 ==="
+          grep 'TELEGRAM_BOT_TOKEN' ~/news_bot/news_bot/.env | cut -c1-40
+          echo "=== 최근 봇 로그 ==="
+          tail -20 ~/bot.log 2>/dev/null || echo "로그 없음"
