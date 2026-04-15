@@ -38,6 +38,6 @@ jobs:
         env:
           GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
           GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
-          TELEGRAM_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_TOKEN:      ${{ secrets.HANTANG_TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ inputs.test_mode == true && '1633958343' || secrets.TELEGRAM_CHAT_ID }}
         run: python update_gsheets.py
