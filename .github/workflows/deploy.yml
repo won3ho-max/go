@@ -31,7 +31,7 @@ jobs:
           # 3. systemd 서비스 파일 생성
           printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
 
-          # 4. 우리 봇만 타겟 종료 (다른 봇 건드리지 않음)
+          # 4. 우리 봇만 타겟 종료
           sudo systemctl stop news_bot 2>/dev/null || true
           pkill -9 -f 'news_bot/news_bot/main.py' 2>/dev/null || true
           sleep 2
@@ -40,18 +40,17 @@ jobs:
           sudo systemctl daemon-reload
           sudo systemctl enable news_bot
           sudo systemctl restart news_bot
-          sleep 3
+          sleep 5
 
-          # 6. 검증
-                    sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
-                    grep -c "🚨" ~/news_bot/news_bot/main.py && echo "OLD_FORMAT" || echo "NEW_FORMAT_OK"
-                    echo "=== 텔레그램 직접 메시지 테스트 ==="
-                    python3 -c "
-          import requests
-          token = open('/home/won3ho/news_bot/news_bot/.env').read()
-          import re
-          t = re.search(r'TELEGRAM_BOT_TOKEN=(\S+)', token).group(1)
-          c = re.search(r'TELEGRAM_CHAT_ID=(\S+)', token).group(1)
-          r = requests.post(f'https://api.telegram.org/bot{t}/sendMessage', json={'chat_id': c, 'text': '테스트 메시지'}, timeout=10)
-          print('STATUS:', r.status_code, r.json().get('ok'), r.json().get('description',''))
-"
+          # 6. 텔레그램 직접 테스트
+          python3 /tmp/tgtest.py || true
+
+          # 7. 검증
+          sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
+          ENDSSH
+
+      - name: Telegram test
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 "
+          python3 -c \"
+import requests,
