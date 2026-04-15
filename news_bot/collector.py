@@ -93,7 +93,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     # 보이스피싱 피해 차단 미담 (PR 기사)
     '피해 막아', '피해 막은', '피싱 막아', '피싱 막은', '피싱 피해 방지',
     # 지역 정례 행사·단체 총회
-    '정례조회', '월례회', '도민체전', '정기총회', '건의문 채택',
+    '정례조회', '월례회', '도민체전', '정기총회', '건의문 채택', '건의문 전달',
     # 교육·연수 행사 (여신·수신 등 금융 용어가 포함돼도 행사성이면 차단)
     '교육 실시', '교육을 실시', '교육 진행', '역량 강화 교육', '실무역량',
     '연수 실시', '워크숍 개최', '세미나 개최', '아카데미 개최', '아카데미 운영',
@@ -126,7 +126,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     '보장 강화', '안전망 확대', '혜택 강화', '서비스 강화', '보장 확대',
     # 지역단위 성과 홍보
     '성과 달성', '최고 성과', '조기 달성', '달성 총력', '성과 가시화',
-    '지역밀착 금융',
+    '지역밀착 금융', '트리플 달성', '드문 성과', '체제 성장세',
     # 정책·캠페인성 (자율 시행, 차량 2부제 등 정부 정책 PR)
     '차량 2부제', '자율 시행', '자율 참여', '자율 실천',
     # 농산물·지역 홍보 행사
@@ -237,15 +237,23 @@ def _extract_key_words(title: str) -> set:
     return {w for w in normalized.split() if len(w) >= 3}
 
 
+def _normalize_title(title: str) -> str:
+    """언론사명 제거 — ' - 언론사' 패턴 삭제"""
+    return re.sub(r'\s*-\s*[^-]+$', '', title).strip()
+
+
 def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> bool:
     """핵심 키워드 3개 이상 겹치면 유사 기사로 판단.
     부분 문자열도 매칭 — 예: '농협은행장' ↔ 'NH농협은행장'
+    언론사명(' - 언론사') 제거 후 비교.
     """
-    words_new = _extract_key_words(title)
+    title_clean = _normalize_title(title)
+    words_new = _extract_key_words(title_clean)
     if len(words_new) < 2:
         return False
     for prev in recent_titles:
-        words_prev = _extract_key_words(prev)
+        prev_clean = _normalize_title(prev)
+        words_prev = _extract_key_words(prev_clean)
         matched_prev = set()
         count = 0
         for wn in words_new:
