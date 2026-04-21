@@ -503,6 +503,6 @@ def format_article(article):
     lines = [f"📰 <b>{title}</b>"]
     if time_str:
         lines.append(time_str)
-    lines.append(url)
+    lines.append(f'<a href="{url}">링크</a>')
 
     return '\n'.join(lines)
