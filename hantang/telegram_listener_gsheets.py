@@ -162,7 +162,7 @@ def tg_send(chat_id, text):
                   data={"chat_id": chat_id, "text": text}, timeout=10)
 
 def parse_recommendation(text: str):
-    if "#종목추천" not in text or "#매수" not in text:
+    if "#종목추천" not in text and "#매수" not in text:
         return None, None
     clean  = re.sub(r"#\S+", "", text).strip()
     tokens = clean.split()
