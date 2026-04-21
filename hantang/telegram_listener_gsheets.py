@@ -2,6 +2,7 @@
 GitHub Actions용 텔레그램 종목 추천 감지 → Google Sheets 직접 기록
 ────────────────────────────────────────────────────────────────────
 로컬 컴퓨터 불필요. pending_stocks.json 우회 없이 Sheets에 직접 씀.
+offset도 Google Sheets '_config' 시트에 저장 → git push 불필요.
 
 환경변수:
   TELEGRAM_TOKEN       - 봇 토큰
@@ -29,7 +30,6 @@ from pathlib import Path
 # ── 설정 ────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 BASE_DIR       = Path(os.path.dirname(os.path.abspath(__file__)))
-OFFSET_FILE    = BASE_DIR / ".telegram_offset"
 SCOPES         = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
@@ -47,7 +47,7 @@ KOREAN_CODES = {
 }
 
 # ── Google Sheets 연결 ────────────────────────────────────────────────────
-def get_worksheet() -> gspread.Worksheet:
+def open_spreadsheet() -> gspread.Spreadsheet:
     creds_json = os.environ.get("GSHEETS_CREDENTIALS", "")
     if creds_json:
         info = json.loads(creds_json)
@@ -62,8 +62,29 @@ def get_worksheet() -> gspread.Worksheet:
     if not sheet_id:
         sheet_id = (BASE_DIR / "gsheets_id.txt").read_text().strip()
 
-    ss = gc.open_by_key(sheet_id)
+    return gc.open_by_key(sheet_id)
+
+def get_worksheet(ss: gspread.Spreadsheet) -> gspread.Worksheet:
     return ss.worksheets()[-1]   # 최신 분기 시트
+
+# ── offset을 Google Sheets '_config' 시트에 저장 ─────────────────────────
+def _get_config_sheet(ss: gspread.Spreadsheet) -> gspread.Worksheet:
+    try:
+        return ss.worksheet("_config")
+    except gspread.WorksheetNotFound:
+        ws = ss.add_worksheet(title="_config", rows=10, cols=2)
+        ws.update_cell(1, 1, "telegram_offset")
+        ws.update_cell(1, 2, "0")
+        return ws
+
+def load_offset(ss: gspread.Spreadsheet) -> int:
+    cfg = _get_config_sheet(ss)
+    val = cfg.cell(1, 2).value
+    return int(val) if val and val.strip().isdigit() else 0
+
+def save_offset(ss: gspread.Spreadsheet, offset: int):
+    cfg = _get_config_sheet(ss)
+    cfg.update_cell(1, 2, str(offset))
 
 # ── 블록 파싱 ────────────────────────────────────────────────────────────
 def find_person_blocks(all_values: list) -> list:
@@ -131,12 +152,6 @@ def add_stock(ws: gspread.Worksheet, all_values: list,
     return True, f"{person_name} / {stock_name} 추가 완료 (기준가는 오늘 장 마감 후 자동 입력)"
 
 # ── 텔레그램 유틸 ─────────────────────────────────────────────────────────
-def load_offset() -> int:
-    return int(OFFSET_FILE.read_text().strip()) if OFFSET_FILE.exists() else 0
-
-def save_offset(offset: int):
-    OFFSET_FILE.write_text(str(offset))
-
 def tg_get(method, **params):
     return requests.get(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
@@ -157,30 +172,15 @@ def get_this_monday() -> datetime.date:
     today = datetime.date.today()
     return today - datetime.timedelta(days=today.weekday())
 
-# ── git push (offset 파일 동기화) ────────────────────────────────────────
-def git_push():
-    try:
-        subprocess.run(["git", "config", "user.email", "github-actions@github.com"],
-                       check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.name",  "GitHub Actions"],
-                       check=True, capture_output=True)
-        subprocess.run(["git", "add", ".telegram_offset"],
-                       check=True, capture_output=True)
-        result = subprocess.run(["git", "commit", "-m",
-                                 f"[bot] offset update {datetime.date.today()}"],
-                                capture_output=True, text=True)
-        if "nothing to commit" not in result.stdout:
-            subprocess.run(["git", "push"], check=True, capture_output=True)
-            print("✅ offset git push 완료")
-    except Exception as e:
-        print(f"[경고] git push 실패: {e}")
-
 # ── 메인 ─────────────────────────────────────────────────────────────────
 def run():
     if not TELEGRAM_TOKEN:
         print("[오류] TELEGRAM_TOKEN 미설정"); sys.exit(1)
 
-    offset = load_offset()
+    ss     = open_spreadsheet()
+    offset = load_offset(ss)
+    print(f"현재 offset: {offset}")
+
     result = tg_get("getUpdates", offset=offset, timeout=0,
                     allowed_updates='["message"]')
     if not result.get("ok"):
@@ -191,7 +191,7 @@ def run():
         print("새 메시지 없음"); return
 
     rec_date  = get_this_monday()
-    ws        = get_worksheet()
+    ws        = get_worksheet(ss)
     all_vals  = ws.get_all_values()
     chat_ids  = set()
     processed = []
@@ -206,17 +206,14 @@ def run():
         person, stock = parse_recommendation(text)
         if person and stock:
             ok, msg_result = add_stock(ws, all_vals, person, stock, rec_date)
-            status = "✅" if ok else "❌"
             print(f"[{'추가' if ok else '실패'}] {person} / {stock}: {msg_result}")
             if ok:
-                # 추가 후 all_values 갱신 (중복 방지)
                 all_vals = ws.get_all_values()
             processed.append((person, stock, ok, msg_result))
 
-        save_offset(update_id + 1)
+        save_offset(ss, update_id + 1)
 
     if processed:
-        # 그룹 알림
         lines = [f"📋 종목 추천 접수 ({rec_date} 기준)"]
         for person, stock, ok, msg in processed:
             lines.append(f"  {'✅' if ok else '❌'} {person} / {stock}")
@@ -225,7 +222,6 @@ def run():
         for cid in chat_ids:
             tg_send(cid, "\n".join(lines))
 
-    git_push()
     print(f"\n총 {len(processed)}건 처리 완료")
 
 if __name__ == "__main__":
