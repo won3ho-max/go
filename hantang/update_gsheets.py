@@ -150,7 +150,11 @@ def _search_naver_stock(name: str):
                             headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         items = resp.json().get("items", [])
         for item in items:
-            if item.get("name") == name or name in item.get("name", ""):
+            item_name = item.get("name", "")
+            # 공백 무시 비교 (마이크론테크놀로지 == 마이크론 테크놀로지)
+            name_nsp = name.replace(" ", "")
+            item_nsp = item_name.replace(" ", "")
+            if item_name == name or name_nsp == item_nsp or name_nsp in item_nsp:
                 code = item.get("code", "")
                 type_code = item.get("typeCode", "")
                 official_name = item.get("name", name)

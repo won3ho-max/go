@@ -243,6 +243,9 @@ def load_portfolio(skip_price_refresh=False):
         all_rets = active_rets + realized_rets
         total_ret = sum(all_rets) if all_rets else 0
 
+        # 추천일 오름차순 정렬 (오래된 것 위, 최근 것 아래)
+        stocks.sort(key=lambda x: x.get("rec_date", ""))
+
         if stocks or realized:
             persons.append({
                 "person": p["name"], "stocks": stocks,
