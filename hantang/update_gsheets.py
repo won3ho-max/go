@@ -135,6 +135,34 @@ def prefetch_prices(jobs: list[tuple[str, str, datetime.date | None]]):
             pass  # fetch_price가 알아서 캐시에 저장
 
 # ── 종목명 파싱 ──────────────────────────────────────────────────────────
+def _search_naver_stock(name: str):
+    """네이버 금융 검색 API로 종목명 → 종목코드/시장 자동 조회"""
+    try:
+        url = "https://ac.stock.naver.com/ac"
+        resp = requests.get(url, params={"q": name, "target": "stock"},
+                            headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        items = resp.json().get("items", [])
+        for item in items:
+            if item.get("name") == name or name in item.get("name", ""):
+                code = item.get("code", "")
+                type_code = item.get("typeCode", "")
+                if not code:
+                    continue
+                # 해외 종목 (NYSE, NASDAQ 등)
+                if type_code not in ("KOSPI", "KOSDAQ"):
+                    print(f"    [자동매칭] {name} → {code} (US/{type_code})")
+                    return "US", code
+                # 한국 종목
+                KOREAN_CODES[name] = code
+                if type_code == "KOSDAQ":
+                    KOSDAQ_CODES.add(code)
+                print(f"    [자동매칭] {name} → {code} ({type_code})")
+                return "KR", code
+    except Exception as e:
+        print(f"    [네이버 검색 실패] {name}: {e}")
+    return None, None
+
+
 def parse_stock(name: str):
     name = str(name).strip()
     m = re.search(r"\(([A-Z]{1,5})\)\s*$", name)
@@ -142,7 +170,8 @@ def parse_stock(name: str):
     m = re.search(r"\(([A-Z0-9]{5,7})\)\s*$", name)
     if m: return "KR", m.group(1)
     if name in KOREAN_CODES: return "KR", KOREAN_CODES[name]
-    return None, None
+    # KOREAN_CODES에 없으면 네이버 검색으로 자동 매칭
+    return _search_naver_stock(name)
 
 # ── 영업일 계산 ──────────────────────────────────────────────────────────
 _cals: dict = {}
