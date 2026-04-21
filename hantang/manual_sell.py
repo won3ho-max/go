@@ -87,7 +87,8 @@ def find_person_blocks(all_values):
 
 def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: float):
     ss = get_spreadsheet()
-    ws = ss.worksheets()[-1]
+    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    ws = sheets[-1]
     print(f"[시트] {ws.title}")
 
     all_values = ws.get_all_values()

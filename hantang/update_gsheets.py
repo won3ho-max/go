@@ -555,7 +555,8 @@ def main():
 
     ss = get_spreadsheet()
     # 마지막 시트 = 현재 분기
-    ws = ss.worksheets()[-1]
+    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    ws = sheets[-1]
     print(f"[시트] {ws.title}")
 
     all_values = ws.get_all_values()

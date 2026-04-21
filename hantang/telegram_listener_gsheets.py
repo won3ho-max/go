@@ -65,7 +65,8 @@ def open_spreadsheet() -> gspread.Spreadsheet:
     return gc.open_by_key(sheet_id)
 
 def get_worksheet(ss: gspread.Spreadsheet) -> gspread.Worksheet:
-    return ss.worksheets()[-1]   # 최신 분기 시트
+    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    return sheets[-1]   # 최신 분기 시트 (_config 등 제외)
 
 # ── offset을 Google Sheets '_config' 시트에 저장 ─────────────────────────
 def _get_config_sheet(ss: gspread.Spreadsheet) -> gspread.Worksheet:
