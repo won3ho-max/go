@@ -292,22 +292,24 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                 skipped.append(f"{person}/{name} (추천일 오류)")
                 continue
 
-            # 기준가 미설정 → 추천일 종가로 고정
-            if not base_price:
-                base = fetch_price(market, code, rec_date)
-                if not base:
-                    base = fetch_price(market, code)  # 추천일 조회 실패 시 현재가 fallback
-                if base:
-                    cur = fetch_price(market, code)
-                    updates.append((row_1, 12, base))    # L: 추천일 종가 (고정)
-                    updates.append((row_1, 13, cur or base))  # M: 현재가
-                    updates.append((row_1, 14, f"=(M{row_1}-L{row_1})/L{row_1}"))  # N
-                    base_price = str(base)
-                    updated.append(f"{person}/{name} 기준가: {base:,} → 현재가: {(cur or base):,}")
-                    print(f"    [기준가] {person}/{name}: {base:,} (추천일) → {(cur or base):,} (현재)")
+            # 매 실행마다 기준가=추천일 종가 검증, 현재가=실행 시점 가격
+            correct_base = fetch_price(market, code, rec_date)
+            cur_price_now = fetch_price(market, code)
+
+            if correct_base:
+                updates.append((row_1, 12, correct_base))  # L: 추천일 종가
+                base_price = str(correct_base)
+            elif not base_price:
+                if cur_price_now:
+                    updates.append((row_1, 12, cur_price_now))  # fallback
+                    base_price = str(cur_price_now)
                 else:
                     skipped.append(f"{person}/{name} (기준가 조회 실패)")
                     continue
+
+            if cur_price_now:
+                updates.append((row_1, 13, cur_price_now))  # M: 현재가
+            updates.append((row_1, 14, f"=(M{row_1}-L{row_1})/L{row_1}"))  # N: 수익률
 
             try:
                 base_f = float(str(base_price).replace(",", ""))
@@ -356,16 +358,12 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                 sold.append(f"{person}/{name}: {sell_date} 매도 ({ret:+.1f}%)")
                 print(f"    [매도] {person}/{name}: {sell_date}, {sell_price:,} ({ret:+.1f}%)")
 
-            # ── 현재가 업데이트 ───────────────────────────────────────
+            # ── 현재가 로그 ───────────────────────────────────────
             else:
-                price = fetch_price(market, code)
-                if price is not None:
-                    updates.append((row_1, 13, price))   # M
-                    if not cell(14):
-                        updates.append((row_1, 14, f"=(M{row_1}-L{row_1})/L{row_1}"))  # N
-                    ret = (price - base_f) / base_f * 100
-                    updated.append(f"{person}/{name}: {price:,} ({ret:+.1f}%)")
-                    print(f"    ✓ {person}/{name} → {price:,} ({ret:+.1f}%)")
+                if cur_price_now is not None:
+                    ret = (cur_price_now - base_f) / base_f * 100
+                    updated.append(f"{person}/{name}: {cur_price_now:,} ({ret:+.1f}%)")
+                    print(f"    ✓ {person}/{name} → {cur_price_now:,} ({ret:+.1f}%)")
                 else:
                     print(f"    ✗ {person}/{name} → 조회 실패")
 
