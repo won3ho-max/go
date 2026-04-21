@@ -106,13 +106,7 @@ def add_stock(ws: gspread.Worksheet, all_values: list,
     if not block:
         return False, f"'{person_name}' 블록을 찾을 수 없음"
 
-    # 중복 체크
-    for r in range(block["row_start"], block["row_end"] + 1):
-        idx = r - 1
-        if idx < len(all_values):
-            j = all_values[idx][9] if len(all_values[idx]) > 9 else ""
-            if j == stock_name:
-                return False, f"{person_name} / {stock_name} 이미 등록됨"
+    # 중복 체크 없음 — 재추천 시 새 행으로 추가
 
     # 빈 행 탐색
     empty_row = next(
