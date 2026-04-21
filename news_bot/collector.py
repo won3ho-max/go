@@ -49,6 +49,8 @@ WHITELIST_KEYWORDS = [
     '금리', '실적', '순이익', '영업이익', '당기순이익', '자산', '부실', '부실대출',
     '여신', '수신', '대출', '예금', '연체', '적자', '흑자', '매출', '수익성',
     'BIS', '자본비율', '건전성', '유동성',
+    # 지자체 금고·계약 (수주전, 금고 심사 등 뉴스 가치 높음)
+    '금고', '수의계약', '금고 운영', '금고 선정',
     # 실적 달성·규모
     '돌파', '달성', '사상 최대', '역대 최대', '최대 실적', '기술금융',
     # 시장 분석 (분석/통계 기사) — 너무 넓은 단어('시장','발표')는 제외
@@ -289,9 +291,11 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
 def is_relevant(title, summary=''):
     text = title + ' ' + summary
     # 1단계: 제목에 농협 관련 키워드가 있어야 통과
-    # (summary에만 '농협카드' 등이 언급되는 업계 일반 기사 차단)
+    # 예외: 지자체 '금고' 기사는 제목에 농협이 없어도 요약에 농협이 있으면 통과
+    # (예: "전남·광주 통합금고, 수의계약으로 운영" — 본문에 NH농협은행 등장)
     if not any(kw in title for kw in KEYWORDS):
-        return False
+        if not ('금고' in title and any(kw in summary for kw in KEYWORDS)):
+            return False
     # 2단계: 구조적 홍보성 패턴 즉시 차단 — 화이트리스트보다 우선 적용
     # (예: '조합장' 화이트리스트라도 '수상' 블랙리스트가 있으면 차단)
     if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
