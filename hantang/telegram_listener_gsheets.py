@@ -35,17 +35,6 @@ SCOPES         = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-KOREAN_CODES = {
-    "삼성전자":    "005930", "삼성SDI":    "006400",
-    "에코프로비엠": "247540", "티엘비":     "356860",
-    "엘앤에프":   "066970", "HD건설기계": "267270",
-    "이노스페이스": "462350", "에스에이엠티": "031330",
-    "한화비전":   "489790", "동성화인텍":  "033500",
-    "세아제강지주": "003030", "SK텔레콤": "017670",
-    "키움증권": "039490", "효성티앤씨": "298050",
-    "삼성전기": "009150", "케이엔솔": "053080",
-}
-
 # ── Google Sheets 연결 ────────────────────────────────────────────────────
 def open_spreadsheet() -> gspread.Spreadsheet:
     creds_json = os.environ.get("GSHEETS_CREDENTIALS", "")
@@ -109,14 +98,6 @@ def find_person_blocks(all_values: list) -> list:
 # ── 종목 추가 ─────────────────────────────────────────────────────────────
 def add_stock(ws: gspread.Worksheet, all_values: list,
               person_name: str, stock_name: str, rec_date: datetime.date) -> tuple[bool, str]:
-
-    # 종목코드 유효성 확인
-    name = stock_name.strip()
-    is_us = bool(re.search(r"\([A-Z]{1,5}\)\s*$", name))
-    is_kr_etf = bool(re.search(r"\([A-Z0-9]{5,7}\)\s*$", name))
-    is_kr = name in KOREAN_CODES or is_kr_etf
-    if not is_us and not is_kr:
-        return False, f"'{stock_name}' 종목 코드 미인식 (KOREAN_CODES 추가 필요)"
 
     blocks = find_person_blocks(all_values)
     block  = next((b for b in blocks
