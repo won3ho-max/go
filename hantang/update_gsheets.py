@@ -136,8 +136,14 @@ def prefetch_prices(jobs: list[tuple[str, str, datetime.date | None]]):
             pass  # fetch_price가 알아서 캐시에 저장
 
 # ── 종목명 파싱 ──────────────────────────────────────────────────────────
+_naver_cache: dict = {}   # {검색어: (official_name, code, market)}
+
 def _search_naver_stock(name: str):
     """네이버 금융 검색 API로 종목명 → 종목코드/시장 자동 조회"""
+    if name in _naver_cache:
+        cached = _naver_cache[name]
+        return cached[2], cached[1]   # market, code
+
     try:
         url = "https://ac.stock.naver.com/ac"
         resp = requests.get(url, params={"q": name, "target": "stock"},
@@ -147,21 +153,44 @@ def _search_naver_stock(name: str):
             if item.get("name") == name or name in item.get("name", ""):
                 code = item.get("code", "")
                 type_code = item.get("typeCode", "")
+                official_name = item.get("name", name)
                 if not code:
                     continue
                 # 해외 종목 (NYSE, NASDAQ 등)
                 if type_code not in ("KOSPI", "KOSDAQ"):
-                    print(f"    [자동매칭] {name} → {code} (US/{type_code})")
+                    _naver_cache[name] = (official_name, code, "US")
+                    print(f"    [자동매칭] {name} → {official_name}({code}) (US/{type_code})")
                     return "US", code
                 # 한국 종목
                 KOREAN_CODES[name] = code
                 if type_code == "KOSDAQ":
                     KOSDAQ_CODES.add(code)
-                print(f"    [자동매칭] {name} → {code} ({type_code})")
+                _naver_cache[name] = (official_name, code, "KR")
+                print(f"    [자동매칭] {name} → {official_name}({code}) ({type_code})")
                 return "KR", code
     except Exception as e:
         print(f"    [네이버 검색 실패] {name}: {e}")
     return None, None
+
+
+def normalize_name(name: str) -> str:
+    """종목명을 네이버 금융 정식 명칭으로 정규화"""
+    clean = name.strip()
+    # 이미 티커가 괄호로 붙어있으면 괄호 앞 이름만 추출해서 검색
+    m = re.search(r"^(.+?)\s*\(([A-Z0-9]{1,7})\)\s*$", clean)
+    search_name = m.group(1).strip() if m else clean
+
+    # 네이버 검색
+    if search_name not in _naver_cache:
+        _search_naver_stock(search_name)
+
+    if search_name in _naver_cache:
+        official, code, market = _naver_cache[search_name]
+        if market == "US":
+            return f"{official}({code})"
+        return official
+
+    return clean  # 검색 실패 시 원본 유지
 
 
 def parse_stock(name: str):
@@ -284,6 +313,13 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
             if not market:
                 skipped.append(f"{person}/{name}")
                 continue
+
+            # 종목명 정규화 (네이버 정식 명칭으로 보정)
+            official = normalize_name(name)
+            if official != name:
+                updates.append((row_1, 10, official))  # J열 정식 명칭으로 갱신
+                print(f"    [정규화] {name} → {official}")
+                name = official
 
             # 추천일 파싱
             try:
