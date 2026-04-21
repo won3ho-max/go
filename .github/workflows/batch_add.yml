@@ -1,0 +1,38 @@
+name: 종목 일괄 추가
+
+on:
+  workflow_dispatch:
+    inputs:
+      stocks:
+        description: '이름:종목명 (쉼표 구분). 예: 송지호:자화전자,조형오:티에이치엔'
+        required: true
+        type: string
+      rec_date:
+        description: '추천일 (YYYY-MM-DD, 비우면 이번주 월요일)'
+        required: false
+        type: string
+
+defaults:
+  run:
+    working-directory: hantang
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install --quiet gspread google-auth
+
+      - name: 종목 추가
+        env:
+          GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
+          GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
+          STOCKS:              ${{ inputs.stocks }}
+          REC_DATE:            ${{ inputs.rec_date }}
+        run: python batch_add_stocks.py
