@@ -258,16 +258,25 @@ def load_portfolio(skip_price_refresh=False):
 
 def shorten_name(name: str) -> str:
     name = str(name).strip()
+    # 괄호 안 종목코드/티커 제거: "종목명 (CODE)" → "종목명"
     m = re.match(r"^(.+?)\s*\([A-Z0-9]+\)\s*$", name)
     if m:
-        return m.group(1).strip()
-    replacements = {
-        "RISE 삼성전자SK하이닉스채권혼합50 (0162Z0)": "RISE 삼성전자SK혼합",
-        "TIGER 미국채10년선물 (305080)": "TIGER 미국채10년",
-        "TIGER 미국테크TOP10 INDXX (381170)": "TIGER 미국테크TOP10",
-        "TIGER 원유선물인버스(H) (217770)": "TIGER 원유인버스",
-    }
-    return replacements.get(name, name)
+        name = m.group(1).strip()
+
+    # 긴 ETF/종목명 축약 규칙 (부분 매칭)
+    shorten_rules = [
+        ("삼성전자SK하이닉스채권혼합", "삼성전자SK혼합"),
+        ("미국채10년선물", "미국채10년"),
+        ("미국테크TOP10 INDXX", "미국테크TOP10"),
+        ("원유선물인버스", "원유인버스"),
+        ("2차전지&원자재", "2차전지원자재"),
+    ]
+    for pattern, short in shorten_rules:
+        if pattern in name:
+            name = name.replace(pattern, short)
+            break
+
+    return name
 
 # ── 드로잉 헬퍼 ─────────────────────────────────────────────────────────
 def draw_rounded_rect(d, x0, y0, x1, y1, fill, radius=0, outline=None):
@@ -401,11 +410,31 @@ def render_person_card(d, person, rank, x, y, w, h):
         bf = _font(bold=True, size=9)
         bb = bf.getbbox(badge_label)
         d.text((x+10+(30-(bb[2]-bb[0]))//2, iy+5), badge_label, font=bf, fill=badge_text)
-        name_display = item.get("short", item.get("name", ""))[:14]
-        d.text((x+46, iy+3), name_display,
-               font=_font(medium=True, size=12), fill=GREY_TEXT if is_sold else DARK_SUB)
-        text_right(d, x+w-12, iy+3, pct_str(item.get("ret")),
-                   _font(bold=True, size=13), pct_color(item.get("ret")))
+
+        # 수익률 텍스트 먼저 측정 (우측 정렬이므로)
+        ret_text = pct_str(item.get("ret"))
+        ret_font = _font(bold=True, size=13)
+        ret_w = ret_font.getbbox(ret_text)[2] - ret_font.getbbox(ret_text)[0]
+
+        # 종목명: 사용 가능한 너비 계산 후 폰트 축소
+        name_display = item.get("short", item.get("name", ""))
+        name_x = x + 46
+        available_w = (x + w - 12) - name_x - ret_w - 8  # 8px 간격
+        name_font_size = 12
+        name_font = _font(medium=True, size=name_font_size)
+        name_w = name_font.getbbox(name_display)[2] - name_font.getbbox(name_display)[0]
+        if name_w > available_w and name_font_size > 9:
+            name_font_size = 10
+            name_font = _font(medium=True, size=name_font_size)
+            name_w = name_font.getbbox(name_display)[2] - name_font.getbbox(name_display)[0]
+        if name_w > available_w:
+            # 그래도 넘치면 말줄임
+            while len(name_display) > 4 and name_font.getbbox(name_display + "…")[2] - name_font.getbbox(name_display + "…")[0] > available_w:
+                name_display = name_display[:-1]
+            name_display = name_display + "…"
+        d.text((name_x, iy+3), name_display,
+               font=name_font, fill=GREY_TEXT if is_sold else DARK_SUB)
+        text_right(d, x+w-12, iy+3, ret_text, ret_font, pct_color(item.get("ret")))
 
         # 2행: 추천일 · 기준가 → 현재가 (or 매도가)
         if item_h >= 38:
