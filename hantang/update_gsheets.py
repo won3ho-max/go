@@ -292,16 +292,19 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                 skipped.append(f"{person}/{name} (추천일 오류)")
                 continue
 
-            # 기준가 미설정 → 현재가로 채움 (워크플로우 실행 시점 기준)
+            # 기준가 미설정 → 추천일 종가로 고정
             if not base_price:
-                price = fetch_price(market, code)
-                if price:
-                    updates.append((row_1, 12, price))   # L: 기준가
-                    updates.append((row_1, 13, price))   # M: 현재가
+                base = fetch_price(market, code, rec_date)
+                if not base:
+                    base = fetch_price(market, code)  # 추천일 조회 실패 시 현재가 fallback
+                if base:
+                    cur = fetch_price(market, code)
+                    updates.append((row_1, 12, base))    # L: 추천일 종가 (고정)
+                    updates.append((row_1, 13, cur or base))  # M: 현재가
                     updates.append((row_1, 14, f"=(M{row_1}-L{row_1})/L{row_1}"))  # N
-                    base_price = str(price)
-                    updated.append(f"{person}/{name} 기준가 설정: {price:,}")
-                    print(f"    [기준가] {person}/{name}: {price:,}")
+                    base_price = str(base)
+                    updated.append(f"{person}/{name} 기준가: {base:,} → 현재가: {(cur or base):,}")
+                    print(f"    [기준가] {person}/{name}: {base:,} (추천일) → {(cur or base):,} (현재)")
                 else:
                     skipped.append(f"{person}/{name} (기준가 조회 실패)")
                     continue
