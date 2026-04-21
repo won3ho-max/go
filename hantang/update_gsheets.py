@@ -32,6 +32,7 @@ _ensure("python-dateutil", "dateutil")
 
 import gspread
 from google.oauth2.service_account import Credentials
+import requests
 import yfinance as yf
 import pandas as pd
 import exchange_calendars as xcals
