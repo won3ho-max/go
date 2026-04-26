@@ -90,7 +90,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     # 농산물·지역 소비
     'K-푸드', '농산물 판매', '직거래',
     # 예방 캠페인성 (사고·사기 예방 특강·홍보 등 — 실제 사고 기사가 아님)
-    '예방 특강', '피해 예방', '예방 총력', '예방에 앞장', '예방 캠페인',
+    '예방 특강', '피해 예방', '피해예방', '예방 총력', '예방에 앞장', '예방 캠페인',
     '예방 교육', '예방 활동', '예방 홍보', '예방영상', '홍보영상',
     # 보이스피싱 피해 차단 미담 (PR 기사) — 어미 변형 포함
     '피해 막아', '피해 막은', '피해 막았', '피싱 막아', '피싱 막은', '피싱 막았', '피싱 피해 방지',
@@ -103,6 +103,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     '파크골프', '골프대회', '골프 대회', '체육대회', '체육 대회',
     '등산대회', '마라톤대회',
     # 무료 서비스·지원 (보이스피싱 보험 무료 지원, 무료 배포 등 캠페인성)
+    '무방문 대출', '무방문 신청',
     '무료 지원', '무료 제공', '무료 배포', '무료 서비스',
     '취약계층 대상', '고령층 대상', '취약계층에게',
     # 복지·사회공헌 지원 (경로당, 간식, 물품 배부 등)
@@ -276,13 +277,15 @@ def save_seen_titles(titles: list):
 
 
 def get_article_id(url, title):
-    return hashlib.md5(f"{url}{title}".encode('utf-8')).hexdigest()
+    # 쿼리파라미터 제거 후 해시 — ?input=xxx 등 트래킹 파라미터가 달라도 동일 기사 처리
+    normalized_url = url.split('?')[0]
+    return hashlib.md5(f"{normalized_url}{title}".encode('utf-8')).hexdigest()
 
 
 def _extract_key_words(title: str) -> set:
-    """특수문자 제거 후 3글자 이상 단어 추출 — 핵심 명사 위주"""
+    """특수문자 제거 후 2글자 이상 단어 추출 — 한글 2글자 단어도 포함"""
     normalized = re.sub(r'[^\w\s]', ' ', title)
-    return {w for w in normalized.split() if len(w) >= 3}
+    return {w for w in normalized.split() if len(w) >= 2}
 
 
 def _normalize_title(title: str) -> str:
@@ -294,8 +297,14 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
     """핵심 키워드 3개 이상 겹치면 유사 기사로 판단.
     부분 문자열도 매칭 — 예: '농협은행장' ↔ 'NH농협은행장'
     언론사명(' - 언론사') 제거 후 비교.
+    완전히 같은 제목은 즉시 중복 처리.
     """
     title_clean = _normalize_title(title)
+    # 완전 일치 제목 즉시 차단
+    for prev in recent_titles:
+        if _normalize_title(prev) == title_clean:
+            logger.debug(f"완전 일치 중복 차단: '{title[:30]}'")
+            return True
     words_new = _extract_key_words(title_clean)
     if len(words_new) < 2:
         return False
