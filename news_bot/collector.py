@@ -21,36 +21,45 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 TRUSTED_DOMAINS = {
     # 뉴스통신사
     'yna.co.kr', 'newsis.com', 'news1.kr', 'einfomax.co.kr',
-    # 경제·금융 전문지
+    # 경제·금융 전문지 (대형)
     'mk.co.kr', 'hankyung.com', 'sedaily.com',
     'mt.co.kr', 'fnnews.com', 'asiae.co.kr',
     'edaily.co.kr', 'heraldcorp.com', 'etoday.co.kr',
     'newspim.com', 'thebell.co.kr', 'businesspost.co.kr',
     'inews24.com', 'ajunews.com', 'fntoday.co.kr',
     'fntimes.com', 'bizwatch.co.kr', 'moneys.co.kr',
-    'newstomato.com', 'dealsite.co.kr',
-    'economist.co.kr', 'sisajournal.com',
-    # 종합일간지 계열
-    'chosun.com', 'biz.chosun.com', 'joongang.co.kr',
-    'donga.com', 'hani.co.kr', 'khan.co.kr',
-    'kmib.co.kr', 'segye.com', 'munhwa.com',
-    'hankookilbo.com', 'naeil.com', 'kukinews.com',
-    'pressian.com', 'ohmynews.com',
+    'newstomato.com', 'dealsite.co.kr', 'investchosun.com',
+    'economist.co.kr', 'sisajournal.com', 'sisain.co.kr',
+    'seoulfn.com', 'efnews.co.kr', 'joseilbo.com',
+    'taxtimes.co.kr', 'insure.co.kr', 'aitimes.com',
+    'econovill.com', 'forbes.co.kr', 'thescoop.co.kr',
+    'newdaily.co.kr', 'polinews.co.kr', 'newsworks.co.kr',
+    # 종합일간지
+    'chosun.com', 'joongang.co.kr', 'donga.com',
+    'hani.co.kr', 'khan.co.kr', 'kmib.co.kr',
+    'segye.com', 'munhwa.com', 'hankookilbo.com',
+    'naeil.com', 'kukinews.com', 'pressian.com',
+    'ohmynews.com', 'mediatoday.co.kr', 'dailian.co.kr',
+    'wikileaks-kr.org', 'sisaon.com', 'sisaweek.com',
     # 방송·TV
-    'ytn.co.kr', 'mbc.co.kr', 'kbs.co.kr',
-    'sbs.co.kr', 'jtbc.co.kr', 'tvchosun.com',
-    'ichannela.com', 'mbn.co.kr',
-    'mtn.co.kr', 'wowtv.co.kr', 'sentv.co.kr',
-    'yonhapnewstv.co.kr',
+    'ytn.co.kr', 'mbc.co.kr', 'kbs.co.kr', 'sbs.co.kr',
+    'jtbc.co.kr', 'tvchosun.com', 'ichannela.com', 'mbn.co.kr',
+    'mtn.co.kr', 'wowtv.co.kr', 'sentv.co.kr', 'mktv.co.kr',
+    'yonhapnewstv.co.kr', 'cbs.co.kr', 'nocutnews.co.kr',
+    'tbs.seoul.kr', 'obs.co.kr', 'arirang.com',
     # IT·전문지
-    'etnews.com', 'zdnet.co.kr', 'bloter.net',
-    'ddaily.co.kr', 'boannews.com', 'dt.co.kr',
-    # 지역 주요 일간지
-    'busan.com', 'yeongnam.com', 'imaeil.com',
-    'daejonilbo.com', 'kwangju.co.kr', 'jnilbo.com',
-    # 기타 주요 매체
-    'dailian.co.kr', 'wikileaks-kr.org',
-    'nocutnews.co.kr', 'tf.co.kr',
+    'etnews.com', 'zdnet.co.kr', 'bloter.net', 'ddaily.co.kr',
+    'boannews.com', 'dt.co.kr', 'itdaily.kr', 'aitimes.kr',
+    'venturesquare.net', 'platum.kr', 'irobotnews.com',
+    # 지역 주요 일간지 (광역시·도 단위)
+    'busan.com', 'kookje.co.kr', 'knnews.co.kr',
+    'yeongnam.com', 'imaeil.com', 'daejonilbo.com',
+    'cctoday.co.kr', 'kwangju.co.kr', 'jnilbo.com',
+    'jjan.kr', 'domin.co.kr', 'kwnews.co.kr', 'kado.net',
+    'jejunews.com', 'ihalla.com', 'incheonilbo.com',
+    'kyeonggi.com', 'joongdo.co.kr',
+    # 기타
+    'tf.co.kr', 'newswire.co.kr',
 }
 
 
