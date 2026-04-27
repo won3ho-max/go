@@ -20,26 +20,37 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 # (주요 뉴스통신사·경제지·종합지·방송 등)
 TRUSTED_DOMAINS = {
     # 뉴스통신사
-    'yna.co.kr', 'newsis.com', 'news1.kr',
+    'yna.co.kr', 'newsis.com', 'news1.kr', 'einfomax.co.kr',
     # 경제·금융 전문지
     'mk.co.kr', 'hankyung.com', 'sedaily.com',
     'mt.co.kr', 'fnnews.com', 'asiae.co.kr',
     'edaily.co.kr', 'heraldcorp.com', 'etoday.co.kr',
     'newspim.com', 'thebell.co.kr', 'businesspost.co.kr',
-    'inews24.com',
+    'inews24.com', 'ajunews.com', 'fntoday.co.kr',
+    'fntimes.com', 'bizwatch.co.kr', 'moneys.co.kr',
+    'newstomato.com', 'dealsite.co.kr',
+    'economist.co.kr', 'sisajournal.com',
     # 종합일간지 계열
     'chosun.com', 'biz.chosun.com', 'joongang.co.kr',
     'donga.com', 'hani.co.kr', 'khan.co.kr',
     'kmib.co.kr', 'segye.com', 'munhwa.com',
-    # 방송
+    'hankookilbo.com', 'naeil.com', 'kukinews.com',
+    'pressian.com', 'ohmynews.com',
+    # 방송·TV
     'ytn.co.kr', 'mbc.co.kr', 'kbs.co.kr',
     'sbs.co.kr', 'jtbc.co.kr', 'tvchosun.com',
+    'ichannela.com', 'mbn.co.kr',
+    'mtn.co.kr', 'wowtv.co.kr', 'sentv.co.kr',
+    'yonhapnewstv.co.kr',
     # IT·전문지
     'etnews.com', 'zdnet.co.kr', 'bloter.net',
-    'ddaily.co.kr', 'boannews.com',
+    'ddaily.co.kr', 'boannews.com', 'dt.co.kr',
+    # 지역 주요 일간지
+    'busan.com', 'yeongnam.com', 'imaeil.com',
+    'daejonilbo.com', 'kwangju.co.kr', 'jnilbo.com',
     # 기타 주요 매체
     'dailian.co.kr', 'wikileaks-kr.org',
-    'sentv.co.kr',
+    'nocutnews.co.kr', 'tf.co.kr',
 }
 
 
