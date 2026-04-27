@@ -6,11 +6,102 @@ import os
 import re
 import logging
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# ─── Anthropic API ────────────────────────────────────────────────
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+
+# 신뢰 출처 — 패턴 필터 통과 시 LLM 체크 없이 그대로 통과
+# (주요 뉴스통신사·경제지·종합지·방송 등)
+TRUSTED_DOMAINS = {
+    # 뉴스통신사
+    'yna.co.kr', 'newsis.com', 'news1.kr',
+    # 경제·금융 전문지
+    'mk.co.kr', 'hankyung.com', 'sedaily.com',
+    'mt.co.kr', 'fnnews.com', 'asiae.co.kr',
+    'edaily.co.kr', 'heraldcorp.com', 'etoday.co.kr',
+    'newspim.com', 'thebell.co.kr', 'businesspost.co.kr',
+    'inews24.com',
+    # 종합일간지 계열
+    'chosun.com', 'biz.chosun.com', 'joongang.co.kr',
+    'donga.com', 'hani.co.kr', 'khan.co.kr',
+    'kmib.co.kr', 'segye.com', 'munhwa.com',
+    # 방송
+    'ytn.co.kr', 'mbc.co.kr', 'kbs.co.kr',
+    'sbs.co.kr', 'jtbc.co.kr', 'tvchosun.com',
+    # IT·전문지
+    'etnews.com', 'zdnet.co.kr', 'bloter.net',
+    'ddaily.co.kr', 'boannews.com',
+    # 기타 주요 매체
+    'dailian.co.kr', 'wikileaks-kr.org',
+    'sentv.co.kr', 'newsquest.co.kr',
+}
+
+
+def _get_domain(url: str) -> str:
+    """URL에서 도메인 추출"""
+    try:
+        return urlparse(url).netloc.replace('www.', '')
+    except Exception:
+        return ''
+
+
+def _is_trusted_source(url: str) -> bool:
+    """신뢰 출처 여부 확인"""
+    domain = _get_domain(url)
+    return any(trusted in domain for trusted in TRUSTED_DOMAINS)
+
+
+# LLM 결과 캐시 (같은 제목 반복 호출 방지)
+_llm_cache: dict[str, bool] = {}
+
+
+def _llm_filter(title: str, summary: str = '') -> bool:
+    """Claude Haiku로 기사 뉴스 가치 판단.
+    True = 통과 (뉴스 가치 있음)
+    False = 차단 (홍보·행사·마케팅성)
+    """
+    if not ANTHROPIC_API_KEY:
+        return True  # API 키 미설정 시 통과
+
+    cache_key = title.strip()
+    if cache_key in _llm_cache:
+        return _llm_cache[cache_key]
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        prompt = f"""NH농협 관련 기사 제목을 보고 뉴스 가치를 판단하세요.
+
+【통과 YES】금융 실적·정책·규제·사건사고·인사·시장분석·논란·의혹·수사 등 실질적 뉴스
+【차단 NO】상품 출시·홍보·지역 행사·사회공헌·수상·캠페인·직원 미담·협약 체결·교육·봉사 등
+
+제목: {title}
+요약: {summary[:150] if summary else '없음'}
+
+YES 또는 NO로만 답하세요."""
+
+        msg = client.messages.create(
+            model='claude-3-5-haiku-20241022',
+            max_tokens=5,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        result = msg.content[0].text.strip().upper()
+        passed = result.startswith('Y')
+        _llm_cache[cache_key] = passed
+        if not passed:
+            logger.info(f"LLM 차단: {title[:60]}")
+        return passed
+
+    except Exception as e:
+        logger.error(f"LLM 필터 오류: {e}")
+        return True  # 오류 시 통과 (안전 방향)
 
 # 네이버 뉴스 검색 API 설정
 NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')
@@ -438,6 +529,10 @@ def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
                 if not is_relevant(title, summary):
                     continue
 
+                # 비신뢰 출처는 LLM 추가 검증
+                if not _is_trusted_source(url) and not _llm_filter(title, summary):
+                    continue
+
                 article_id = get_article_id(url, title)
                 if article_id in seen:
                     continue
@@ -506,6 +601,10 @@ def fetch_new_articles():
                     continue
 
                 if not is_relevant(title, summary):
+                    continue
+
+                # 비신뢰 출처는 LLM 추가 검증
+                if not _is_trusted_source(url) and not _llm_filter(title, summary):
                     continue
 
                 article_id = get_article_id(url, title)
