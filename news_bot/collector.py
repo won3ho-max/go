@@ -286,6 +286,14 @@ STRUCTURAL_PROMO_PATTERNS = [
     '위안행사', '감사의 마음', '위안의 밤',
     # 농촌 인력·생산 기사 ('감사'가 화이트리스트라 STRUCTURAL로 차단)
     '계절근로자', '농촌 인력', '인력난',
+    # 장애인·사회공헌 행사 (장애인의 날, 대안학교 환경개선 등)
+    '장애인의 날', '환경개선 나서', '환경개선에 나서',
+    # 영농 폐기물·환경 봉사 활동
+    '영농폐기물', '폐기물 수거', '영농쓰레기',
+    # 내부 심사·분석 회의 개최 (강원농협 심사분석회의 등)
+    '심사분석회의', '심사분석 회의',
+    # 농산물·수출 실적 달성 홍보 ('달성'이 화이트리스트라 STRUCTURAL로 차단)
+    '수출 달성', '수출액 달성', '달러 달성', '만달러 달성',
     # 지역 농협 농가 지원 행사·홍보 (친환경 벼·쌀 등 농업 생산 지원)
     '친환경 벼', '벼 농가 지원', '친환경농업 지원',
     # 슬로건성 클리셰 제목 (당선 후 소통 행사 홍보 등)
@@ -499,7 +507,9 @@ def is_relevant(title, summary=''):
     # 예외: 지자체 '금고' 기사는 제목에 농협이 없어도 요약에 농협이 있으면 통과
     # (예: "전남·광주 통합금고, 수의계약으로 운영" — 본문에 NH농협은행 등장)
     if not any(kw in title for kw in KEYWORDS):
-        if not ('금고' in title and any(kw in summary for kw in KEYWORDS)):
+        # 지자체 금고 예외 — '새마을금고' 등 타 금융기관은 제외
+        has_standalone_gumgo = '금고' in title and '새마을금고' not in title and '새마을' not in title
+        if not (has_standalone_gumgo and any(kw in summary for kw in KEYWORDS)):
             return False
     # 2단계: 구조적 홍보성 패턴 즉시 차단 — 화이트리스트보다 우선 적용
     # (예: '조합장' 화이트리스트라도 '수상' 블랙리스트가 있으면 차단)
