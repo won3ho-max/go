@@ -55,6 +55,7 @@ KOREAN_CODES = {
     "세아제강지주": "003030", "SK텔레콤": "017670",
     "키움증권": "039490", "효성티앤씨": "298050",
     "삼성전기": "009150", "케이엔솔": "053080",
+    "포스코홀딩스": "005490", "POSCO홀딩스": "005490",
 }
 KOSDAQ_CODES = {"247540","356860","462350","031330"}  # 066970(엘앤에프)는 야후서 .KS로 등록
 
@@ -144,34 +145,55 @@ def _search_naver_stock(name: str):
         cached = _naver_cache[name]
         return cached[2], cached[1]   # market, code
 
+    # KOREAN_CODES에 등록된 종목은 네이버 검색 없이 즉시 반환
+    if name in KOREAN_CODES:
+        code = KOREAN_CODES[name]
+        _naver_cache[name] = (name, code, "KR")
+        print(f"    [사전매칭] {name} → {code} (KR)")
+        return "KR", code
+
     try:
         url = "https://ac.stock.naver.com/ac"
         resp = requests.get(url, params={"q": name, "target": "stock"},
                             headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         items = resp.json().get("items", [])
+
+        # 매칭되는 결과를 한국/해외로 분리 (한국 우선)
+        kr_match = None
+        us_match = None
+        name_nsp = name.replace(" ", "")
+
         for item in items:
             item_name = item.get("name", "")
-            # 공백 무시 비교 (마이크론테크놀로지 == 마이크론 테크놀로지)
-            name_nsp = name.replace(" ", "")
             item_nsp = item_name.replace(" ", "")
-            if item_name == name or name_nsp == item_nsp or name_nsp in item_nsp:
-                code = item.get("code", "")
-                type_code = item.get("typeCode", "")
-                official_name = item.get("name", name)
-                if not code:
-                    continue
-                # 해외 종목 (NYSE, NASDAQ 등)
-                if type_code not in ("KOSPI", "KOSDAQ"):
-                    _naver_cache[name] = (official_name, code, "US")
-                    print(f"    [자동매칭] {name} → {official_name}({code}) (US/{type_code})")
-                    return "US", code
-                # 한국 종목
-                KOREAN_CODES[name] = code
-                if type_code == "KOSDAQ":
-                    KOSDAQ_CODES.add(code)
-                _naver_cache[name] = (official_name, code, "KR")
-                print(f"    [자동매칭] {name} → {official_name}({code}) ({type_code})")
-                return "KR", code
+            if not (item_name == name or name_nsp == item_nsp or name_nsp in item_nsp):
+                continue
+            code = item.get("code", "")
+            if not code:
+                continue
+            type_code = item.get("typeCode", "")
+            official_name = item.get("name", name)
+
+            if type_code in ("KOSPI", "KOSDAQ"):
+                kr_match = (official_name, code, type_code)
+                break  # 한국 종목 발견 시 즉시 확정
+            elif not us_match:
+                us_match = (official_name, code, type_code)
+
+        # 한국 종목 우선
+        if kr_match:
+            official_name, code, type_code = kr_match
+            KOREAN_CODES[name] = code
+            if type_code == "KOSDAQ":
+                KOSDAQ_CODES.add(code)
+            _naver_cache[name] = (official_name, code, "KR")
+            print(f"    [자동매칭] {name} → {official_name}({code}) ({type_code})")
+            return "KR", code
+        elif us_match:
+            official_name, code, type_code = us_match
+            _naver_cache[name] = (official_name, code, "US")
+            print(f"    [자동매칭] {name} → {official_name}({code}) (US/{type_code})")
+            return "US", code
     except Exception as e:
         print(f"    [네이버 검색 실패] {name}: {e}")
     return None, None
