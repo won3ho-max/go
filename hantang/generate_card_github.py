@@ -442,7 +442,9 @@ def render_person_card(d, person, rank, x, y, w, h):
             rec_short = rec[5:] if rec and len(rec) >= 10 else rec
             mkt = item.get("market", "KR")
             if is_sold:
-                meta = f"{rec_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('sell_price',0), mkt)}"
+                sell_dt = item.get("sell_date", "")
+                sell_short = sell_dt[5:] if sell_dt and len(sell_dt) >= 10 else sell_dt
+                meta = f"{rec_short}→{sell_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('sell_price',0), mkt)}"
             else:
                 meta = f"{rec_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('current',0), mkt)}"
             d.text((x+46, iy+22), meta, font=_font(size=10), fill=GREY_TEXT)
