@@ -384,8 +384,8 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
 
             sell_date = calc_sell_date(rec_date, market)
 
-            # ── 자동 매도 ─────────────────────────────────────────────
-            if sell_date <= today:
+            # ── 자동 매도 (sell_date < today: 종가 확정된 날만) ────────
+            if sell_date < today:
                 # P열 빈 행 탐색
                 p_row = None
                 for r in range(row_start, row_end + 1):
@@ -583,6 +583,9 @@ def export_portfolio_json(all_values: list, sheet_name: str, today: datetime.dat
 
             if not p_name: continue
 
+            # 시장 판별 (US/KR)
+            p_market, p_code = parse_stock(str(p_name).strip())
+
             try:
                 ret_val = float(str(p_ret).replace("%", "").replace(",", ""))
                 # U열이 소수(0.05 = 5%)인지 백분율(5.0)인지 판별
@@ -601,6 +604,7 @@ def export_portfolio_json(all_values: list, sheet_name: str, today: datetime.dat
 
             realized.append({
                 "name": str(p_name).strip(), "status": "sold",
+                "market": p_market or "KR",
                 "rec_date":    p_rec[:10] if p_rec else None,
                 "sell_date":   p_sell_dt[:10] if p_sell_dt else None,
                 "base_price":  bp,

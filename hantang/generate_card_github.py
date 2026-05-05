@@ -232,7 +232,8 @@ def load_portfolio(skip_price_refresh=False):
             ret = ret_pct / 100 if ret_pct is not None else None
             realized.append({
                 "name": r.get("name", ""), "short": shorten_name(r.get("name", "")),
-                "status": "sold", "rec_date": r.get("rec_date", ""),
+                "status": "sold", "market": r.get("market", "KR"),
+                "rec_date": r.get("rec_date", ""),
                 "sell_date": r.get("sell_date", ""),
                 "base": r.get("base_price") or 0, "sell_price": r.get("sell_price") or 0,
                 "ret": ret,
