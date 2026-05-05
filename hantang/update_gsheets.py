@@ -639,6 +639,85 @@ def run_card_and_telegram(today: datetime.date):
         print(f"[경고] 카드뉴스/텔레그램 실패: {e}")
 
 
+# ── 실현 종목 매도일 소급 수정 ─────────────────────────────────────────────
+def fix_realized_sell_dates(ws: gspread.Worksheet, today: datetime.date):
+    """
+    자동매도 원칙 변경에 따른 소급 수정:
+    기존: prev_trading_day(rec_date + 1month)
+    신규: prev_trading_day(rec_date + 1month - 1day)
+
+    수동 매도 건은 건드리지 않음 (기존 공식 결과와 다른 날짜면 수동으로 판단)
+    """
+    all_values = ws.get_all_values()
+    blocks = find_person_blocks(all_values)
+    updates = []
+    fixed = []
+
+    for block in blocks:
+        person = block["person"]
+        for row_1 in range(block["row_start"], block["row_end"] + 1):
+            idx = row_1 - 1
+            if idx >= len(all_values):
+                continue
+            row = all_values[idx]
+
+            p_name    = row[15] if len(row) > 15 else ""  # P: 종목명
+            p_rec     = row[16] if len(row) > 16 else ""  # Q: 추천일
+            p_sell_dt = row[17] if len(row) > 17 else ""  # R: 매도일
+            p_base    = row[18] if len(row) > 18 else ""  # S: 기준가
+            p_sell_pr = row[19] if len(row) > 19 else ""  # T: 매도가
+
+            if not p_name or not p_rec or not p_sell_dt:
+                continue
+
+            try:
+                rec_date = datetime.date.fromisoformat(str(p_rec).strip()[:10])
+                cur_sell = datetime.date.fromisoformat(str(p_sell_dt).strip()[:10])
+            except (ValueError, TypeError):
+                continue
+
+            # 종목의 시장 판별
+            market, code = parse_stock(str(p_name).strip())
+            if not market:
+                continue
+
+            # 기존 공식으로 계산한 매도일 (rec_date + 1month 당일 포함)
+            old_sell = prev_trading_day(rec_date + relativedelta(months=1), market)
+
+            # 현재 매도일이 기존 공식 결과와 같으면 → 자동매도 건 → 소급 수정
+            if cur_sell != old_sell:
+                continue  # 수동 매도 건이므로 패스
+
+            # 새 공식으로 재계산
+            new_sell = calc_sell_date(rec_date, market)
+            if new_sell == cur_sell:
+                continue  # 이미 동일하면 패스
+
+            # 새 매도일 종가 조회
+            new_price = fetch_price(market, code, new_sell)
+            if new_price is None:
+                new_price = fetch_price(market, code)
+            if new_price is None:
+                print(f"    [소급수정 실패] {person}/{p_name}: 매도가 조회 불가")
+                continue
+
+            # R열(매도일), T열(매도가) 수정, U열(수익률) 수식 유지
+            updates.append({"range": f"R{row_1}", "values": [[str(new_sell)]]})
+            updates.append({"range": f"T{row_1}", "values": [[new_price]]})
+            updates.append({"range": f"U{row_1}", "values": [[f"=(T{row_1}-S{row_1})/S{row_1}"]]})
+
+            fixed.append(f"{person}/{p_name}: {cur_sell}→{new_sell} ({new_price:,})")
+            print(f"    [소급수정] {person}/{p_name}: {cur_sell} → {new_sell}, 매도가={new_price:,}")
+
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        print(f"  소급 수정 완료: {len(fixed)}건")
+    else:
+        print(f"  소급 수정 대상 없음")
+
+    return fixed
+
+
 # ── 메인 ────────────────────────────────────────────────────────────────
 def today_kst():
     """KST(UTC+9) 기준 오늘 날짜"""
@@ -673,11 +752,16 @@ def main():
     if skipped:
         print(f"코드 미인식:     {len(skipped)}건")
 
-    # 3. portfolio.json 내보내기
+    # 3. 실현 종목 매도일 소급 수정 (원칙 변경 반영)
+    fixed = fix_realized_sell_dates(ws, today)
+    if fixed:
+        for f in fixed: print(f"  · {f}")
+
+    # 4. portfolio.json 내보내기
     all_values = ws.get_all_values()
     export_portfolio_json(all_values, ws.title, today)
 
-    # 4. 카드뉴스 생성 + 텔레그램
+    # 5. 카드뉴스 생성 + 텔레그램
     run_card_and_telegram(today)
 
 
