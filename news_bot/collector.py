@@ -63,12 +63,30 @@ TRUSTED_DOMAINS = {
 }
 
 
+# 차단 도메인 — 금융·경영과 무관한 지역 농업지·저품질 매체
+# 이 도메인에서 온 기사는 is_relevant() 체크 전에 즉시 차단
+BLOCKED_DOMAINS = {
+    'youngnong.co.kr',       # 영농뉴스 — 지역 농업 전문지, 금융 기사 거의 없음
+    'pinpointnews.co.kr',    # 핀포인트뉴스 — 브랜드평판 순위 기사 양산
+    'newsworker.co.kr',      # 뉴스워커 — 지역 농협 홍보성 기사 다수
+    'thefirstmedia.net',     # 더퍼스트미디어 — 사회공헌·행사 홍보 기사
+    'gukjenews.com',         # 국제뉴스 — 지역 농협 서비스 홍보
+    'jndn.com',              # 전남도민뉴스 — 지역 행정·농업 기사
+}
+
+
 def _get_domain(url: str) -> str:
     """URL에서 도메인 추출"""
     try:
         return urlparse(url).netloc.replace('www.', '')
     except Exception:
         return ''
+
+
+def _is_blocked_source(url: str) -> bool:
+    """차단 도메인 여부 확인"""
+    domain = _get_domain(url)
+    return any(blocked in domain for blocked in BLOCKED_DOMAINS)
 
 
 def _is_trusted_source(url: str) -> bool:
@@ -593,6 +611,10 @@ def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
                 if not title or not url:
                     continue
 
+                # 차단 도메인 즉시 제외
+                if _is_blocked_source(url):
+                    continue
+
                 # 홍보성 필터 적용 (1단계 키워드 체크는 쿼리 자체가 이미 농협 한정이므로 생략 가능하나 일관성을 위해 유지)
                 if not is_relevant(title, summary):
                     continue
@@ -666,6 +688,10 @@ def fetch_new_articles():
                     source = feed.feed.title
 
                 if not title or not url:
+                    continue
+
+                # 차단 도메인 즉시 제외
+                if _is_blocked_source(url):
                     continue
 
                 if not is_relevant(title, summary):
