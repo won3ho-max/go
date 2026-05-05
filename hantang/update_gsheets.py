@@ -244,7 +244,10 @@ def prev_trading_day(target: datetime.date, market: str) -> datetime.date:
     return sess[-1].date() if len(sess) > 0 else target
 
 def calc_sell_date(rec_date: datetime.date, market: str) -> datetime.date:
-    return prev_trading_day(rec_date + relativedelta(months=1), market)
+    # 추천일+1달 미만의 마지막 거래일 (1달 되는 날 제외)
+    one_month_later = rec_date + relativedelta(months=1)
+    day_before = one_month_later - datetime.timedelta(days=1)
+    return prev_trading_day(day_before, market)
 
 # ── 블록 파싱 ────────────────────────────────────────────────────────────
 def find_person_blocks(all_values: list) -> list:
