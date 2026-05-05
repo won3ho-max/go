@@ -696,6 +696,9 @@ def fix_realized_sell_dates(ws: gspread.Worksheet, today: datetime.date):
             new_sell = calc_sell_date(rec_date, market)
             if new_sell == cur_sell:
                 continue  # 이미 동일하면 패스
+            if new_sell >= today:
+                print(f"    [소급수정 대기] {person}/{p_name}: {new_sell}은 아직 종가 미확정")
+                continue  # 종가 미확정 날짜는 수정하지 않음
 
             # 새 매도일 종가 조회
             new_price = fetch_price(market, code, new_sell)
