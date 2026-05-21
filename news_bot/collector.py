@@ -94,6 +94,15 @@ def _get_domain(url: str) -> str:
         return ''
 
 
+# 주요 경영진 실명 — 제목에 등장하면 신뢰 출처라도 LLM 체크 강제
+# (모내기·행사 등 PR 기사가 LLM 없이 통과되는 것을 방지)
+EXEC_NAMES = {'강호동', '박서홍', '이찬우', '강태영'}
+
+
+def _has_exec_name(title: str) -> bool:
+    return any(name in title for name in EXEC_NAMES)
+
+
 def _is_blocked_source(url: str, source_name: str = '') -> bool:
     """차단 도메인 또는 차단 소스 이름 여부 확인.
     Google 뉴스 RSS는 URL이 news.google.com이라 도메인 체크가 우회됨 —
@@ -342,6 +351,8 @@ STRUCTURAL_PROMO_PATTERNS = [
     '위안행사', '감사의 마음', '위안의 밤',
     # 농촌 인력·생산 기사 ('감사'가 화이트리스트라 STRUCTURAL로 차단)
     '계절근로', '농촌 인력', '인력난',
+    # 농촌 체험·행사 (경영진 포함이라도 차단)
+    '모내기', '논 체험', '농촌 체험', '밭 체험',
     # 장애인·사회공헌 행사 (장애인의 날, 대안학교 환경개선 등)
     '장애인의 날', '환경개선 나서', '환경개선에 나서',
     # 영농 폐기물·환경 봉사 활동
@@ -708,8 +719,10 @@ def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
                 if not is_relevant(title, summary):
                     continue
 
-                # 비신뢰 출처는 LLM 추가 검증
-                if not _is_trusted_source(url) and not _llm_filter(title, summary):
+                # 비신뢰 출처 또는 경영진 실명 포함 기사는 LLM 검증
+                # (경영진 이름은 신뢰 출처라도 모내기·행사 등 PR 기사가 끼어들 수 있음)
+                needs_llm = not _is_trusted_source(url) or _has_exec_name(title)
+                if needs_llm and not _llm_filter(title, summary):
                     continue
 
                 article_id = get_article_id(url, title)
@@ -786,8 +799,10 @@ def fetch_new_articles():
                 if not is_relevant(title, summary):
                     continue
 
-                # 비신뢰 출처는 LLM 추가 검증
-                if not _is_trusted_source(url) and not _llm_filter(title, summary):
+                # 비신뢰 출처 또는 경영진 실명 포함 기사는 LLM 검증
+                # (경영진 이름은 신뢰 출처라도 모내기·행사 등 PR 기사가 끼어들 수 있음)
+                needs_llm = not _is_trusted_source(url) or _has_exec_name(title)
+                if needs_llm and not _llm_filter(title, summary):
                     continue
 
                 article_id = get_article_id(url, title)
