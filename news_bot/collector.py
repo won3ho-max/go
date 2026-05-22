@@ -74,6 +74,7 @@ BLOCKED_DOMAINS = {
     'jndn.com',              # 전남도민뉴스 — 지역 행정·농업 기사
     'woryesanup.co.kr',      # 원예산업신문 — 농협 가공공장·농업 행사 기사
     'newsquest.co.kr',       # 뉴스퀘스트 — 시니어 행사·전통주 체험 홍보 기사 다수
+    'insnews.co.kr',         # 보험뉴스 — IT 인프라·내부 시스템 홍보성 기사
 }
 
 # Google 뉴스 RSS 경유 시 URL이 news.google.com이라 도메인 체크 우회됨
@@ -83,6 +84,7 @@ BLOCKED_SOURCE_NAMES = {
     '더퍼스트미디어', '국제뉴스', '전남도민뉴스', '뉴스퀘스트',
     '시민행정신문', '경기경제신문', '안전신문', '농수축산신문',
     '일간경기', 'gmitoday', '위즈뉴스', '투데이안',
+    '뉴스포스트',  # 반부패·청렴 행사성 기사 다수
 }
 
 
@@ -150,16 +152,24 @@ def _llm_filter(title: str, summary: str = '') -> bool:
 - 행장·대표이사 취임·해임·사퇴 등 주요 인사
 - 횡령·배임·수사·압수수색·검찰 관련 사건
 - 금리·시장·부실·연체·건전성 분석
+- 유상증자·자본 확충·출자·자본정책: 그룹 차원 또는 계열사 대상 증자, CET1·RWA 등 자본 건전성 대응
+- 농협 지배구조·선출제도 변경: 직선제·간선제·선거제도 개편, 회장 선출방식 수용·거부·철회 발표
+- 중앙회장·행장의 주요 정책 공식 발표 또는 입장 표명 (개혁안 수용, 제도 변경 등)
+- 논란·의혹·비판: 경영진 행보 관련 비판적 보도, 오락가락 행보, 번복 등
 
 【NO — 차단】아래는 예외 없이 차단:
 - TV광고 공개, 모델 발탁, 브랜드 홍보
 - 감사패·표창·수상·시상식 (경찰청장 감사패 등)
-- 피해농가 지원, 화재 복구 지원, 농촌 봉사
+- 피해농가 지원, 화재 복구 지원, 농촌 봉사, 모내기 등 농촌 활동
 - 협약·MOU·업무협약·파트너십 체결
 - 금융교육, 캠페인, 이벤트, 행사
 - 지역 농협 행사, 지역사회 활동
 - 전기차·농산물·축산 등 금융과 무관한 주제
 - 지방선거 출마, 정치 기사
+- 경영 비전·전략 선포 홍보 (X조로 Y한다, 상생성장, 돈길 튼다, OOO에 앞장 등 클리셰 제목)
+- 칼럼·기고·인터뷰 시리즈 (금융기업가정신, 인물탐방, 기명 시리즈 등)
+- IT 인프라·내부 시스템 구축 (감리원 확충, 정보시스템 구축 등 — 금융 리스크 자체가 아닌 IT 행정)
+- 반부패·청렴·내부통제 행사·회의 개최 (추진계획 점검, 논의 등 내부 행정 행사)
 
 제목: {title}
 요약: {summary[:200] if summary else '없음'}
@@ -254,6 +264,10 @@ WHITELIST_KEYWORDS = [
     # 시장·전략
     'IPO', '상장', '합병', '인수', '매각', '분사', '구조조정',
     '금융사고', '내부통제',
+    # 자본 정책 — 유상증자·자본확충·출자 등 (2026-05-22 누락 사례 반영)
+    '증자', '유상증자', '자본확충', '자본 확충', '출자', '역출자',
+    # 자본 건전성 지표
+    'CET1', '보통주자본비율', '위험가중자산', 'RWA',
 ]
 
 # 구조적 홍보성 패턴 — 제목 시작 또는 특정 형태로 판별
@@ -517,6 +531,14 @@ PROMO_KEYWORDS = [
     '연속 1위', '연속 최우수', '연속 우수', '부문 1위', '부문 최우수',
     # 브랜드·제품 돌파구 홍보
     '정면돌파', '정면 돌파',
+    # 경영 비전·전략 발표 홍보 ('X조로 Y한다', '상생성장', '돈길 튼다' 등 비전 선포성)
+    '상생성장', '돈길 튼다', '길을 튼다', '길 튼다',
+    # 칼럼·기고 시리즈 (기원상의 금융기업가정신, XX의 OO 등 기명 칼럼)
+    '금융기업가정신',
+    # 반부패·청렴 내부 행사 (추진계획 점검, 청렴 논의 등 내부 행정)
+    '청렴 추진', '반부패 추진', '추진계획 점검',
+    # IT 인프라·시스템 구축 홍보 (금융 리스크와 무관한 내부 시스템 기사)
+    '감리원', '정보시스템 감리', 'IT 인프라',
 ]
 
 RSS_FEEDS = [
@@ -524,8 +546,14 @@ RSS_FEEDS = [
     "https://news.google.com/rss/search?q=농협&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=NH농협은행&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=농협중앙회&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=농협금융&hl=ko&gl=KR&ceid=KR:ko",
     # Google 뉴스 — RSS 없는 언론사 보완 (MTN 머니투데이방송 등)
     "https://news.google.com/rss/search?q=농협+site:news.mtn.co.kr&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 주요 경영진 실명 검색 (site: 제한 없이 전 매체 빠른 수집)
+    "https://news.google.com/rss/search?q=강호동+농협&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=박서홍+농협&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=이찬우+농협&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=강태영+농협&hl=ko&gl=KR&ceid=KR:ko",
     # 연합뉴스
     "https://www.yna.co.kr/rss/economy.xml",
     "https://www.yna.co.kr/rss/society.xml",
