@@ -59,7 +59,7 @@ CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL_MINUTES', '30'))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🌾 <b>농협 뉴스 모니터링 봇</b>\n\n"
+        "🌾🐟 <b>농협·수협 뉴스 모니터링 봇</b>\n\n"
         f"⏱ 확인 주기: {CHECK_INTERVAL}분마다\n\n"
         "명령어:\n"
         "/status - 봇 상태 확인\n"
@@ -185,7 +185,7 @@ def main():
         time=time(6, 0, 0, tzinfo=KST),
     )
 
-    logger.info(f"봇 시작 - {CHECK_INTERVAL}분마다 농협 뉴스 모니터링")
+    logger.info(f"봇 시작 - {CHECK_INTERVAL}분마다 농협·수협 뉴스 모니터링")
     app.run_polling()
 
 
