@@ -208,6 +208,8 @@ NAVER_SEARCH_QUERIES = [
     '수협', 'Sh수협은행', '수협중앙회',
     # 5대 금융지주 (시중은행 포함 그룹 차원 뉴스 커버)
     'KB금융', '신한금융', '하나금융', '우리금융',
+    # 규제·정책 기관
+    '금융감독원', '금융위원회',
 ]
 
 # 수집 대상: 전 금융권 (단, 증권사·자산운용사는 제외)
@@ -226,7 +228,7 @@ KEYWORDS = [
     'IBK기업은행', '기업은행', 'IBK',
     # ── 지방 금융지주·은행 ──
     'BNK금융', 'BNK부산은행', '부산은행', 'BNK경남은행', '경남은행',
-    'DGB금융', 'DGB대구은행', '대구은행', 'iM뱅크',
+    'iM금융', 'iM금융지주', '대구은행', 'iM뱅크',  # DGB→iM 사명 변경 (2024)
     'JB금융', 'JB광주은행', '광주은행', 'JB전북은행', '전북은행',
     '제주은행', 'SC제일은행', '한국씨티은행',
     # ── 인터넷전문은행 ──
@@ -643,6 +645,10 @@ RSS_FEEDS = [
     "https://news.google.com/rss/search?q=생명보험+실적&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=저축은행+건전성&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=카드사+실적&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 규제·정책 기관 (직접 RSS 없어 검색으로 보완)
+    "https://news.google.com/rss/search?q=금융감독원&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=금융위원회&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=예금보험공사&hl=ko&gl=KR&ceid=KR:ko",
     # 연합뉴스
     "https://www.yna.co.kr/rss/economy.xml",
     "https://www.yna.co.kr/rss/society.xml",
