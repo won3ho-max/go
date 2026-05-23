@@ -6,7 +6,7 @@ import fcntl
 from datetime import time, datetime
 from zoneinfo import ZoneInfo
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from dotenv import load_dotenv
 from collector import fetch_new_articles, format_article
 
@@ -92,6 +92,27 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def report_unknown_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """진단용: 봇이 등록되지 않은 chat(주로 채널·그룹)에서 메시지를 받으면
+    관리자 1:1 채팅(CHAT_ID)으로 해당 chat의 ID를 통보. 채널 ID 확보 후 제거할 것.
+    """
+    chat = update.effective_chat
+    if not chat:
+        return
+    if str(chat.id) == str(CHAT_ID):
+        return  # 본인 채팅에서 온 메시지는 스킵
+    msg = (
+        f"\U0001F4CD <b>새 chat ID 감지</b>\n"
+        f"• ID: <code>{chat.id}</code>\n"
+        f"• Type: {chat.type}\n"
+        f"• Title: {chat.title or chat.username or chat.first_name or '(none)'}"
+    )
+    try:
+        await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"chat ID 통보 오류: {e}")
+
+
 async def heartbeat(context):
     try:
         await context.bot.send_message(
@@ -168,6 +189,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("news", news_command))
+    # 진단용 핸들러 — 채널 ID 확보 후 제거
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, report_unknown_chat))
 
     app.job_queue.run_repeating(
         scheduled_check,
