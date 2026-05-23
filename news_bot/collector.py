@@ -260,6 +260,10 @@ KEYWORDS = [
     # ── 통칭 ──
     '시중은행', '지방은행', '인터넷전문은행', '인터넷은행',
     '5대 금융지주', '4대 금융지주', '금융지주', '저축은행', '상호금융',
+    '5대 은행', '4대 은행', '주요 은행', '시중 5대 은행',
+    # ── 정부·정책 프로그램명 (2026-05-23 클릭베이트 누락 대응) ──
+    '국민성장펀드', '국민참여성장펀드', '생산적 금융', '포용금융',
+    'NH 상생성장 프로젝트',
 ]
 
 # ─────────────────────────────────────────────────────────────────
@@ -760,33 +764,50 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
     return False
 
 
+# 클릭베이트 제목 패턴 — 제목에 회사명 없고 일반 금융상품어만 있는 경우
+# 이 경우 본문(summary)에 KEYWORDS가 있으면 통과시켜 LLM 단계로 넘김
+CLICKBAIT_PRODUCT_HINTS = [
+    '펀드', '예금', '적금', '대출', '신상품', '금융상품',
+    '카드', '보험', '신탁',
+]
+
+
 def is_relevant(title, summary=''):
     text = title + ' ' + summary
-    # 1단계: 제목에 농협 관련 키워드가 있어야 통과
-    # 예외: 지자체 '금고' 기사는 제목에 농협이 없어도 요약에 농협이 있으면 통과
-    # (예: "전남·광주 통합금고, 수의계약으로 운영" — 본문에 NH농협은행 등장)
-    if not any(kw in title for kw in KEYWORDS):
-        # 지자체 금고 예외 — '새마을금고' 등 타 금융기관은 제외
-        has_standalone_gumgo = '금고' in title and '새마을금고' not in title and '새마을' not in title
-        if not (has_standalone_gumgo and any(kw in summary for kw in KEYWORDS)):
-            return False
-    # 2단계: 구조적 홍보성 패턴 즉시 차단 — 화이트리스트보다 우선 적용
-    # (예: '조합장' 화이트리스트라도 '수상' 블랙리스트가 있으면 차단)
+    # 1단계: 제목에 키워드가 있어야 통과
+    # 예외 1: 지자체 '금고' 단독 — 본문에 농협 등 있으면 통과
+    # 예외 2: 제목이 클릭베이트('이 펀드 뭐길래' 등)라 금융상품어만 있고 회사명 없으면
+    #         본문 KEYWORDS로 fallback (서울경제 '국민성장펀드' 첫날 완판 등)
+    title_has_kw = any(kw in title for kw in KEYWORDS)
+    has_standalone_gumgo = '금고' in title and '새마을금고' not in title and '새마을' not in title
+    has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
+    summary_has_kw = any(kw in summary for kw in KEYWORDS)
+    is_clickbait_fallback = (not title_has_kw) and (has_standalone_gumgo or has_product_hint) and summary_has_kw
+
+    if not title_has_kw and not is_clickbait_fallback:
+        return False
+    # 2단계: 구조적 홍보성 패턴 즉시 차단
     if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
         return False
-    # 3단계: 블랙리스트 차단 — 화이트리스트보다 우선 적용
+    # 3단계: 블랙리스트 차단
     if any(kw in title for kw in PROMO_KEYWORDS):
         return False
     # 4단계: [단독] / [속보] 취재 기사 즉시 통과
-    # (홍보성 필터를 통과한 단독·속보 기사는 영양가 있는 취재 기사로 판단)
     SCOOP_TAGS = ['[단독]', '[속보]', '[단독보도]']
     if any(tag in title for tag in SCOOP_TAGS):
         return True
     # 5단계: 화이트리스트 — 제목에 영양가 있는 키워드가 있어야 통과
-    # (요약에만 금융 키워드가 언급되는 복지·홍보성 기사 차단)
     if any(kw in title for kw in WHITELIST_KEYWORDS):
         return True
-    # 6단계: 화이트리스트 키워드 없으면 기본 차단
+    # 5-A) 클릭베이트 fallback이면 본문 WHITELIST 또는 다수 KEYWORDS 매치도 허용
+    if is_clickbait_fallback:
+        if any(kw in summary for kw in WHITELIST_KEYWORDS):
+            return True
+        summary_kw_count = sum(1 for kw in KEYWORDS if kw in summary)
+        if summary_kw_count >= 2:
+            # 본문에 2개 이상 금융사·프로그램명 등장 = 진짜 금융 뉴스
+            return True
+    # 6단계: 기본 차단
     return False
 
 
