@@ -106,6 +106,17 @@ def _has_exec_name(title: str) -> bool:
     return any(name in title for name in EXEC_NAMES)
 
 
+def _is_clickbait_pass(title: str) -> bool:
+    """클릭베이트 제목 판단 — 회사명 KEYWORDS는 없고 금융상품어만 있는 경우.
+    True면 신뢰 출처라도 LLM 강제 검증을 거치게 함 (PR성 기사 차단 강화).
+    """
+    if any(kw in title for kw in KEYWORDS):
+        return False
+    has_gumgo = '금고' in title and '새마을금고' not in title and '새마을' not in title
+    has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
+    return has_gumgo or has_product_hint
+
+
 def _is_blocked_source(url: str, source_name: str = '') -> bool:
     """차단 도메인 또는 차단 소스 이름 여부 확인.
     Google 뉴스 RSS는 URL이 news.google.com이라 도메인 체크가 우회됨 —
@@ -170,6 +181,8 @@ def _llm_filter(title: str, summary: str = '') -> bool:
 - 지방선거 출마, 정치 기사
 - 증권사·자산운용사 단독 기사 (KB증권, NH투자증권, 미래에셋자산운용 등이 메인 주체인 경우)
   * 단, 지주·은행이 함께 등장하는 그룹 차원 기사는 YES (예: 'KB금융, KB증권 인수' 등)
+- 신규 금융상품 출시·홍보 (단순 상품 출시·인기·완판·매진·페이백 강조)
+  * 다만 정부·금융당국이 주도하는 공적 펀드·정책상품의 시장 반응은 YES로 처리
 - 경영 비전·전략 선포 홍보 (X조로 Y한다, 상생성장, 돈길 튼다, OOO에 앞장 등 클리셰 제목)
 - 칼럼·기고·인터뷰 시리즈 (금융기업가정신, 인물탐방, 기명 시리즈 등)
 - IT 인프라·내부 시스템 구축 (감리원 확충, 정보시스템 구축 등 — 금융 리스크 자체가 아닌 IT 행정)
@@ -606,6 +619,9 @@ PROMO_KEYWORDS = [
     '연속 1위', '연속 최우수', '연속 우수', '부문 1위', '부문 최우수',
     # 브랜드·제품 돌파구 홍보
     '정면돌파', '정면 돌파',
+    # 클릭베이트 PR 어구 (2026-05-23 fallback 보강)
+    '인기몰이', '히트 상품', '히트상품', '판매 호조', '판매호조',
+    '매진 행진', '판매 1위', '판매1위', '소비자가 뽑은', '고객이 선택한',
     # 카드사 PR 패턴 (제휴카드 출시·페이백·캐시백 이벤트)
     '제휴카드', '연계카드', '제휴 카드', '연계 카드', '페이백', '캐시백 이벤트',
     '플래티넘 카드', '프리미엄 카드',
@@ -875,7 +891,11 @@ def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
 
                 # 비신뢰 출처 또는 경영진 실명 포함 기사는 LLM 검증
                 # (경영진 이름은 신뢰 출처라도 모내기·행사 등 PR 기사가 끼어들 수 있음)
-                needs_llm = not _is_trusted_source(url) or _has_exec_name(title)
+                needs_llm = (
+                    not _is_trusted_source(url)
+                    or _has_exec_name(title)
+                    or _is_clickbait_pass(title)
+                )
                 if needs_llm and not _llm_filter(title, summary):
                     continue
 
@@ -955,7 +975,11 @@ def fetch_new_articles():
 
                 # 비신뢰 출처 또는 경영진 실명 포함 기사는 LLM 검증
                 # (경영진 이름은 신뢰 출처라도 모내기·행사 등 PR 기사가 끼어들 수 있음)
-                needs_llm = not _is_trusted_source(url) or _has_exec_name(title)
+                needs_llm = (
+                    not _is_trusted_source(url)
+                    or _has_exec_name(title)
+                    or _is_clickbait_pass(title)
+                )
                 if needs_llm and not _llm_filter(title, summary):
                     continue
 
