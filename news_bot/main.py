@@ -6,7 +6,7 @@ import fcntl
 from datetime import time, datetime
 from zoneinfo import ZoneInfo
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 from collector import fetch_new_articles, format_article
 
@@ -53,7 +53,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+# ADMIN_CHAT_ID — 본인 1:1 채팅 (하트비트·에러 알림 등 운영자만 받는 정보)
+# .env의 TELEGRAM_CHAT_ID(=1633958343, deploy.yml이 매번 덮어씀)에서 읽음
+ADMIN_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+# BROADCAST_CHAT_ID — 공개 채널 (다른 사람도 볼 수 있도록 뉴스를 발송하는 대상)
+# 채널 ID는 deploy.yml로 이전하려면 PAT workflow scope 필요하므로 우선 코드에 하드코딩
+BROADCAST_CHAT_ID = '-1003717850867'  # 금융 뉴스 모니터링(MTN)
+# 하위 호환용 별칭 — 기존 코드의 CHAT_ID 참조를 채널로 통합
+CHAT_ID = BROADCAST_CHAT_ID
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL_MINUTES', '30'))
 
 
@@ -73,7 +80,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ <b>봇 정상 작동 중</b>\n"
         f"⏱ 확인 주기: {CHECK_INTERVAL}분마다\n"
-        f"💬 알림 채널: {CHAT_ID}",
+        f"📢 뉴스 발송 채널: <code>{BROADCAST_CHAT_ID}</code>\n"
+        f"🛠 관리자 채팅: <code>{ADMIN_CHAT_ID}</code>",
         parse_mode='HTML'
     )
 
@@ -92,31 +100,11 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def report_unknown_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """진단용: 봇이 등록되지 않은 chat(주로 채널·그룹)에서 메시지를 받으면
-    관리자 1:1 채팅(CHAT_ID)으로 해당 chat의 ID를 통보. 채널 ID 확보 후 제거할 것.
-    """
-    chat = update.effective_chat
-    if not chat:
-        return
-    if str(chat.id) == str(CHAT_ID):
-        return  # 본인 채팅에서 온 메시지는 스킵
-    msg = (
-        f"\U0001F4CD <b>새 chat ID 감지</b>\n"
-        f"• ID: <code>{chat.id}</code>\n"
-        f"• Type: {chat.type}\n"
-        f"• Title: {chat.title or chat.username or chat.first_name or '(none)'}"
-    )
-    try:
-        await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='HTML')
-    except Exception as e:
-        logger.error(f"chat ID 통보 오류: {e}")
-
-
 async def heartbeat(context):
+    """하트비트는 운영자 1:1 채팅으로만 — 채널 노이즈 방지"""
     try:
         await context.bot.send_message(
-            chat_id=CHAT_ID,
+            chat_id=ADMIN_CHAT_ID,
             text="✅ 정상 작동 중입니다",
         )
     except Exception as e:
@@ -124,14 +112,14 @@ async def heartbeat(context):
 
 
 async def send_pending(context):
-    """06:00 KST — 수면시간 동안 쌓인 기사 일괄 발송"""
+    """06:00 KST — 수면시간 동안 쌓인 기사 일괄 발송 (공개 채널)"""
     pending = load_pending()
     if not pending:
         return
     save_pending([])
     try:
         await context.bot.send_message(
-            chat_id=CHAT_ID,
+            chat_id=BROADCAST_CHAT_ID,
             text=f"🌅 <b>수면시간 동안 수집된 뉴스 {len(pending)}건</b>",
             parse_mode='HTML',
         )
@@ -140,7 +128,7 @@ async def send_pending(context):
     for article in pending:
         try:
             await context.bot.send_message(
-                chat_id=CHAT_ID,
+                chat_id=BROADCAST_CHAT_ID,
                 text=format_article(article),
                 parse_mode='HTML',
                 disable_web_page_preview=True
@@ -164,7 +152,7 @@ async def scheduled_check(context):
         for article in articles[:10]:
             try:
                 await context.bot.send_message(
-                    chat_id=CHAT_ID,
+                    chat_id=BROADCAST_CHAT_ID,
                     text=format_article(article),
                     parse_mode='HTML',
                     disable_web_page_preview=True
@@ -181,16 +169,16 @@ def main():
 
     if not BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN 환경변수가 없습니다. .env 파일을 확인하세요.")
-    if not CHAT_ID:
-        raise ValueError("TELEGRAM_CHAT_ID 환경변수가 없습니다. .env 파일을 확인하세요.")
+    if not ADMIN_CHAT_ID:
+        raise ValueError("TELEGRAM_CHAT_ID(ADMIN_CHAT_ID) 환경변수가 없습니다.")
+    if not BROADCAST_CHAT_ID:
+        raise ValueError("BROADCAST_CHAT_ID가 비어 있습니다. main.py 상단을 확인하세요.")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("news", news_command))
-    # 진단용 핸들러 — 채널 ID 확보 후 제거
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, report_unknown_chat))
 
     app.job_queue.run_repeating(
         scheduled_check,
