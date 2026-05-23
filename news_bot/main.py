@@ -61,7 +61,9 @@ ADMIN_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 BROADCAST_CHAT_ID = '-1003717850867'  # 금융 뉴스 모니터링(MTN)
 # 하위 호환용 별칭 — 기존 코드의 CHAT_ID 참조를 채널로 통합
 CHAT_ID = BROADCAST_CHAT_ID
-CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL_MINUTES', '30'))
+# 폴링 주기 (분). 2026-05-23부터 30→15 단축.
+# .env의 CHECK_INTERVAL_MINUTES 값에 관계없이 코드 기본값 우선 적용 (서버 .env 직접 수정 불필요)
+CHECK_INTERVAL = 15
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
