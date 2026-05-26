@@ -346,8 +346,11 @@ WHITELIST_KEYWORDS = [
     '감독', '검사', '제도 변경', '기준금리',
     # 농협 개혁·쇄신 관련
     '개혁', '쇄신', '개혁위', '개혁안', '혁신안', '위원장',
-    # 시장·전략
-    'IPO', '상장', '합병', '인수', '매각', '분사', '구조조정',
+    # 시장·전략 ('합병' 단독은 '종합병원'에 substring 매치되어 제외)
+    'IPO', '상장', '인수합병', '인수·합병', '합병 발표', '합병 결정',
+    '합병 의결', '합병안 의결', 'M&A', '매각', '분사', '구조조정',
+    # '인수'는 '인수자', '인수합병' 등에서 매치되지만 그대로 유지 (오탐 적음)
+    '인수',
     '금융사고', '내부통제',
     # 자본 정책 — 유상증자·자본확충·출자·보강 등 (2026-05-22 누락 사례 반영)
     '증자', '유상증자', '자본확충', '자본 확충', '자본 보강', '자본보강',
@@ -646,6 +649,15 @@ PROMO_KEYWORDS = [
     '자산 보호망', '보호망 강화', '보호망을 강화',
     # '총력전' (기존 '총력 대응'에 어구 변형 추가)
     '총력전', '총력 캠페인',
+    # 신문 게시판·은행가 등 PR 묶음 시리즈 태그 (2026-05-26)
+    '[은행가]', '[은행권]', '[게시판]', '[알림]', '[부고]', '[행사]',
+    '카드뉴스', '오늘 드림', "'오늘 드림'",
+    # 사회공헌 봉사 패턴 (명의·세브란스 등 의료진 농촌 방문)
+    '명의들이', '명의가', '농촌으로 왔다', '찾아가는 종합병원', '찾아가는 의료',
+    '의료진 방문', '의료 봉사',
+    # 금융교육·사회공헌 (yna 같은 신뢰 출처는 LLM 안 거치므로 STRUCTURAL 필수)
+    '금융교육', '금융 교육', '러너 대상', '시각장애인 대상',
+    '취약계층 금융', '청소년 대상 금융',
     # 카드사 PR 패턴 (제휴카드 출시·페이백·캐시백 이벤트)
     '제휴카드', '연계카드', '제휴 카드', '연계 카드', '페이백', '캐시백 이벤트',
     '플래티넘 카드', '프리미엄 카드',
@@ -1061,16 +1073,50 @@ def _to_kst_str(published: str) -> str:
         return published
 
 
+def _extract_media(title: str, source: str, url: str) -> tuple[str, str]:
+    """제목 뒤의 ' - 매체명' / ' | 매체명' 분리 + source/url로 보완.
+    Returns (clean_title, media_name)
+    """
+    clean_title = title
+    media = ''
+    # 제목 뒤 ' - 매체명' 또는 ' | 매체명' 패턴 제거
+    m = re.search(r'\s+[\-\|]\s+([^\-\|]{1,30})$', title)
+    if m:
+        media = m.group(1).strip()
+        clean_title = title[:m.start()].strip()
+    # source가 명시돼 있으면 우선 사용 (Google RSS entry.source.title 등)
+    if source:
+        clean_source = source.split(' > ')[0].split(' - ')[0].strip()
+        if clean_source:
+            media = clean_source
+    # 그래도 비어있으면 URL 도메인 fallback
+    if not media:
+        try:
+            domain = urlparse(url).netloc
+            for prefix in ('www.', 'news.', 'biz.', 'm.'):
+                if domain.startswith(prefix):
+                    domain = domain[len(prefix):]
+                    break
+            media = domain
+        except Exception:
+            media = ''
+    return clean_title, media
+
+
 def format_article(article):
     title = article['title']
     url = article['url']
     published = article.get('published', '')
+    source = article.get('source', '')
 
+    clean_title, media = _extract_media(title, source, url)
     time_str = _to_kst_str(published)
 
-    lines = [f"📰 <b>{title}</b>"]
+    lines = [f"<b>{clean_title}</b>"]
     if time_str:
         lines.append(time_str)
+    if media:
+        lines.append(media)
     lines.append(f'<a href="{url}">링크</a>')
 
     return '\n'.join(lines)
