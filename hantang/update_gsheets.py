@@ -744,6 +744,17 @@ def main():
 
     all_values = ws.get_all_values()
 
+    # 0. 일회성 날짜 보정: K열 2026-05-25 → 2026-05-26
+    _fix_updates = []
+    for i, row in enumerate(all_values):
+        k_val = row[10] if len(row) > 10 else ""
+        if str(k_val).strip() == "2026-05-25":
+            _fix_updates.append({"range": f"K{i+1}", "values": [["2026-05-26"]]})
+    if _fix_updates:
+        ws.batch_update(_fix_updates, value_input_option="USER_ENTERED")
+        print(f"  [날짜보정] K열 2026-05-25 → 2026-05-26: {len(_fix_updates)}건")
+        all_values = ws.get_all_values()
+
     # 1. 대기 종목 추가
     added = process_pending(ws, all_values, today)
 
