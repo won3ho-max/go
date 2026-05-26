@@ -144,9 +144,9 @@ def parse_recommendation(text: str):
     tokens = clean.split()
     return (tokens[0], tokens[1]) if len(tokens) >= 2 else (None, None)
 
-def get_this_monday() -> datetime.date:
-    today = datetime.date.today()
-    return today - datetime.timedelta(days=today.weekday())
+def get_rec_date() -> datetime.date:
+    """추천일 = 실행 당일 (월요일 강제 변환 안 함)"""
+    return datetime.date.today()
 
 # ── 메인 ─────────────────────────────────────────────────────────────────
 def run():
@@ -166,7 +166,7 @@ def run():
     if not updates:
         print("새 메시지 없음"); return
 
-    rec_date  = get_this_monday()
+    rec_date  = get_rec_date()
     ws        = get_worksheet(ss)
     all_vals  = ws.get_all_values()
     chat_ids  = set()

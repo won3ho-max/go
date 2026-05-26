@@ -77,17 +77,17 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date):
     return True, f"{person_name} / {stock_name} 추가 완료"
 
 
-def get_monday(date_str=None):
+def get_rec_date(date_str=None):
+    """명시적 날짜가 있으면 그대로 사용, 없으면 이번 주 월요일"""
     if date_str:
-        d = datetime.date.fromisoformat(date_str)
-    else:
-        d = datetime.date.today()
+        return datetime.date.fromisoformat(date_str)
+    d = datetime.date.today()
     return d - datetime.timedelta(days=d.weekday())
 
 
 def run():
     stocks_raw = os.environ.get("STOCKS", "")
-    rec_date = get_monday(os.environ.get("REC_DATE") or None)
+    rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
 
     if not stocks_raw:
         print("[오류] STOCKS 환경변수 미설정")
