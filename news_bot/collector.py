@@ -275,6 +275,10 @@ KEYWORDS = [
     '시중은행', '지방은행', '인터넷전문은행', '인터넷은행',
     '5대 금융지주', '4대 금융지주', '금융지주', '저축은행', '상호금융',
     '5대 은행', '4대 은행', '주요 은행', '시중 5대 은행',
+    # 산업 통칭 (2026-05-26 누락 사례 — 머투 주담대, 동아 금융사고 등)
+    '금융권', '은행권', '보험권', '금융사고',
+    # 화재보험협회(=손해보험협회 옛 명칭, 청년일보 사례)
+    '화보협회',
     # ── 정부·정책 프로그램명 (2026-05-23 클릭베이트 누락 대응) ──
     '국민성장펀드', '국민참여성장펀드', '생산적 금융', '포용금융',
     'NH 상생성장 프로젝트',
@@ -332,6 +336,9 @@ WHITELIST_KEYWORDS = [
     # 정통 금융 칼럼 시리즈 태그 (2026-05-25 MTN 사례)
     '[금융 히스토리]', '[금융 인사이트]', '[금융 풍속도]', '[금융 IN]',
     '[금융 NOW]', '[CEO 라운지]',
+    # 비즈니스 영향 분석 어구 (2026-05-26 서울신문 '스벅 제휴 카드사 셈법' 사례)
+    # — 농촌·PR 기사에 거의 안 나오고 비즈니스 분석 기사에 자주 등장
+    '역풍', '셈법', '딜레마', '난감',
     # 농협 개혁 핵심 이슈
     '직선제', '철회', '번복', '오락가락',
     # 주요 경영진 실명 — 이름이 기사 제목에 등장하면 주목 가치 있음
@@ -658,8 +665,12 @@ PROMO_KEYWORDS = [
     # 금융교육·사회공헌 (yna 같은 신뢰 출처는 LLM 안 거치므로 STRUCTURAL 필수)
     '금융교육', '금융 교육', '러너 대상', '시각장애인 대상',
     '취약계층 금융', '청소년 대상 금융',
-    # 카드사 PR 패턴 (제휴카드 출시·페이백·캐시백 이벤트)
-    '제휴카드', '연계카드', '제휴 카드', '연계 카드', '페이백', '캐시백 이벤트',
+    # 카드사 PR 패턴 — '제휴/연계 카드' 단독은 비즈니스 영향 분석에도 등장하므로
+    # 출시·혜택·선보임 등 PR 동작과 결합한 어구만 차단 (2026-05-26 서울신문 '스벅 제휴 카드사' 사례)
+    '제휴카드 출시', '제휴카드 혜택', '제휴카드 선보', '제휴카드 신규',
+    '제휴 카드 출시', '제휴 카드 혜택', '제휴 카드 선보', '제휴 카드 신규',
+    '연계카드 출시', '연계카드 혜택', '연계 카드 출시', '연계 카드 혜택',
+    '페이백', '캐시백 이벤트',
     '플래티넘 카드', '프리미엄 카드',
     # 보험사 PR 패턴 (특약 출시·디지털 전환 자랑)
     '특약 출시', '신상품 라인업', '디지털 혁신상', '디지털 보험금',
@@ -821,6 +832,10 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
 CLICKBAIT_PRODUCT_HINTS = [
     '펀드', '예금', '적금', '대출', '신상품', '금융상품',
     '카드', '보험', '신탁',
+    # 대출 상품 통칭 (2026-05-26 머투 '주담대 금리역전' / 연합 '주담대 고정금리' 누락 사례)
+    '주담대', '주택담보대출', '전세대출', '신용대출', '갈아타기',
+    # 인사 어구 (한국금융신문 '회장 복귀' 누락 사례 — 본문 KEYWORDS로 fallback)
+    '회장 복귀', '회장직 복귀', '이사장 후보', '이사장 선출',
 ]
 
 
@@ -835,8 +850,12 @@ def is_relevant(title, summary=''):
     has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
     summary_has_kw = any(kw in summary for kw in KEYWORDS)
     is_clickbait_fallback = (not title_has_kw) and (has_standalone_gumgo or has_product_hint) and summary_has_kw
+    # 추가 fallback: [단독] 단독 취재는 본문 KEYWORDS 매치 시 step 1 우회
+    # (영양가 있는 취재로 가정하되, 본문 검증으로 금융 무관 기사 방지)
+    has_scoop_tag = '[단독]' in title or '[단독보도]' in title
+    is_scoop_fallback = (not title_has_kw) and has_scoop_tag and summary_has_kw
 
-    if not title_has_kw and not is_clickbait_fallback:
+    if not title_has_kw and not is_clickbait_fallback and not is_scoop_fallback:
         return False
     # 2단계: 구조적 홍보성 패턴 즉시 차단
     if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
@@ -852,8 +871,8 @@ def is_relevant(title, summary=''):
     # 5단계: 화이트리스트 — 제목에 영양가 있는 키워드가 있어야 통과
     if any(kw in title for kw in WHITELIST_KEYWORDS):
         return True
-    # 5-A) 클릭베이트 fallback이면 본문 WHITELIST 또는 다수 KEYWORDS 매치도 허용
-    if is_clickbait_fallback:
+    # 5-A) 클릭베이트 / 단독 fallback이면 본문 WHITELIST 또는 다수 KEYWORDS 매치도 허용
+    if is_clickbait_fallback or is_scoop_fallback:
         if any(kw in summary for kw in WHITELIST_KEYWORDS):
             return True
         summary_kw_count = sum(1 for kw in KEYWORDS if kw in summary)
