@@ -57,6 +57,7 @@ KOREAN_CODES = {
     "삼성전기": "009150", "케이엔솔": "053080",
     "포스코홀딩스": "005490", "POSCO홀딩스": "005490",
     "코스모로보틱스": "439960",
+    "네이버": "035420", "NAVER": "035420",
 }
 KOSDAQ_CODES = {"247540","356860","462350","031330","439960"}  # 066970(엘앤에프)는 야후서 .KS로 등록
 
@@ -166,20 +167,37 @@ def _search_naver_stock(name: str):
 
         for item in items:
             item_name = item.get("name", "")
+            item_code = item.get("code", "")
             item_nsp = item_name.replace(" ", "")
-            if not (item_name == name or name_nsp == item_nsp or name_nsp in item_nsp):
+            # 이름 매칭: 한글/영문 동일, 공백무시 동일, 부분포함, 또는 티커코드 일치
+            matched = (item_name == name
+                       or name_nsp == item_nsp
+                       or name_nsp in item_nsp
+                       or name.upper() == item_code.upper())
+            if not matched:
                 continue
-            code = item.get("code", "")
-            if not code:
+            if not item_code:
                 continue
             type_code = item.get("typeCode", "")
             official_name = item.get("name", name)
 
             if type_code in ("KOSPI", "KOSDAQ"):
-                kr_match = (official_name, code, type_code)
+                kr_match = (official_name, item_code, type_code)
                 break  # 한국 종목 발견 시 즉시 확정
             elif not us_match:
-                us_match = (official_name, code, type_code)
+                us_match = (official_name, item_code, type_code)
+
+        # 이름 매칭 실패했지만 검색 결과가 1건뿐이면 해당 종목으로 간주
+        if not kr_match and not us_match and len(items) == 1:
+            item = items[0]
+            item_code = item.get("code", "")
+            type_code = item.get("typeCode", "")
+            official_name = item.get("name", name)
+            if item_code:
+                if type_code in ("KOSPI", "KOSDAQ"):
+                    kr_match = (official_name, item_code, type_code)
+                else:
+                    us_match = (official_name, item_code, type_code)
 
         # 한국 종목 우선
         if kr_match:
