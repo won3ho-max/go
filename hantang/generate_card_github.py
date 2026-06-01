@@ -387,40 +387,44 @@ def render_person_card(d, person, rank, x, y, w, h):
     ret_color = WHITE if rank < 3 else pct_color(ret)
     text_right(d, x+w-12, y+6, pct_str(ret), _font(bold=True, size=17), ret_color)
     sy = y + hdr_h + 4
-    all_items = person["stocks"] + person.get("realized", [])
-    item_h = min(48, (h - hdr_h - 10) // max(len(all_items), 1))
-    for j, item in enumerate(all_items):
-        iy = sy + j * item_h
-        if iy + item_h > y + h - 2:
+    active_items = [s for s in person["stocks"]]
+    sold_items = person.get("realized", [])
+    avail_h = h - hdr_h - 10
+
+    # 매도 종목은 1행(22px), 활성 종목은 2행(나머지 균등 배분)
+    sold_h = 22
+    total_sold_h = len(sold_items) * sold_h
+    active_space = avail_h - total_sold_h
+    active_h = min(48, active_space // max(len(active_items), 1)) if active_items else 0
+
+    # 활성 종목 먼저 렌더링
+    iy = sy
+    for j, item in enumerate(active_items):
+        if iy + active_h > y + h - 2:
             break
-
-        is_sold = item.get("status") == "sold"
-        if is_sold:
-            badge_bg, badge_text, badge_label = (255, 237, 219), SOLD_BADGE, "매도"
-        elif item.get("market") == "KR":
-            badge_bg, badge_text, badge_label = (219, 234, 254), BLUE_BADGE, "KR"
-        else:
-            badge_bg, badge_text, badge_label = (248, 219, 237), PINK_BADGE, "US"
-
-        # 구분선
+        mkt = item.get("market", "KR")
         if j > 0:
             d.line([x+10, iy, x+w-10, iy], fill=GREY_BORDER, width=1)
 
-        # 1행: 뱃지 + 종목명 + 수익률
+        # 뱃지
+        if mkt == "KR":
+            badge_bg, badge_text, badge_label = (219, 234, 254), BLUE_BADGE, "KR"
+        else:
+            badge_bg, badge_text, badge_label = (248, 219, 237), PINK_BADGE, "US"
         draw_rounded_rect(d, x+10, iy+4, x+40, iy+19, badge_bg, radius=3)
         bf = _font(bold=True, size=9)
         bb = bf.getbbox(badge_label)
         d.text((x+10+(30-(bb[2]-bb[0]))//2, iy+5), badge_label, font=bf, fill=badge_text)
 
-        # 수익률 텍스트 먼저 측정 (우측 정렬이므로)
+        # 수익률
         ret_text = pct_str(item.get("ret"))
         ret_font = _font(bold=True, size=13)
         ret_w = ret_font.getbbox(ret_text)[2] - ret_font.getbbox(ret_text)[0]
 
-        # 종목명: 사용 가능한 너비 계산 후 폰트 축소
+        # 종목명 (동적 폰트)
         name_display = item.get("short", item.get("name", ""))
         name_x = x + 46
-        available_w = (x + w - 12) - name_x - ret_w - 8  # 8px 간격
+        available_w = (x + w - 12) - name_x - ret_w - 8
         name_font_size = 12
         name_font = _font(medium=True, size=name_font_size)
         name_w = name_font.getbbox(name_display)[2] - name_font.getbbox(name_display)[0]
@@ -429,26 +433,46 @@ def render_person_card(d, person, rank, x, y, w, h):
             name_font = _font(medium=True, size=name_font_size)
             name_w = name_font.getbbox(name_display)[2] - name_font.getbbox(name_display)[0]
         if name_w > available_w:
-            # 그래도 넘치면 말줄임
             while len(name_display) > 4 and name_font.getbbox(name_display + "…")[2] - name_font.getbbox(name_display + "…")[0] > available_w:
                 name_display = name_display[:-1]
             name_display = name_display + "…"
-        d.text((name_x, iy+3), name_display,
-               font=name_font, fill=GREY_TEXT if is_sold else DARK_SUB)
+        d.text((name_x, iy+3), name_display, font=name_font, fill=DARK_SUB)
         text_right(d, x+w-12, iy+3, ret_text, ret_font, pct_color(item.get("ret")))
 
-        # 2행: 추천일 · 기준가 → 현재가 (or 매도가)
-        if item_h >= 38:
+        # 2행: 추천일 · 가격
+        if active_h >= 38:
             rec = item.get("rec_date", "")
             rec_short = rec[5:] if rec and len(rec) >= 10 else rec
-            mkt = item.get("market", "KR")
-            if is_sold:
-                sell_dt = item.get("sell_date", "")
-                sell_short = sell_dt[5:] if sell_dt and len(sell_dt) >= 10 else sell_dt
-                meta = f"{rec_short}→{sell_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('sell_price',0), mkt)}"
-            else:
-                meta = f"{rec_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('current',0), mkt)}"
+            meta = f"{rec_short}  {price_str(item.get('base',0), mkt)} → {price_str(item.get('current',0), mkt)}"
             d.text((x+46, iy+22), meta, font=_font(size=10), fill=GREY_TEXT)
+
+        iy += active_h
+
+    # 매도 종목: 1행 컴팩트 (종목명 수익률만)
+    if sold_items and iy < y + h - 2:
+        d.line([x+10, iy+2, x+w-10, iy+2], fill=GREY_LIGHT, width=1)
+        iy += 4
+    for j, item in enumerate(sold_items):
+        if iy + sold_h > y + h - 2:
+            break
+        mkt = item.get("market", "KR")
+        # 매도 뱃지 (작게)
+        draw_rounded_rect(d, x+10, iy+3, x+34, iy+15, (255, 237, 219), radius=2)
+        sf = _font(bold=True, size=8)
+        sb = sf.getbbox("매도")
+        d.text((x+10+(24-(sb[2]-sb[0]))//2, iy+3), "매도", font=sf, fill=SOLD_BADGE)
+
+        # 종목명 (작은 폰트)
+        name_display = item.get("short", item.get("name", ""))
+        sell_dt = item.get("sell_date", "")
+        sell_short = sell_dt[5:] if sell_dt and len(sell_dt) >= 10 else sell_dt
+        label = f"{name_display} {sell_short}"
+        d.text((x+38, iy+2), label, font=_font(size=9), fill=GREY_TEXT)
+
+        # 수익률 (우측)
+        ret_text = pct_str(item.get("ret"))
+        text_right(d, x+w-12, iy+2, ret_text, _font(bold=True, size=10), pct_color(item.get("ret")))
+        iy += sold_h
 
 # ── 시장 지표 패널 (랭킹 아래) ────────────────────────────────────────────
 def render_market_panel(d, market_data, x0, y0, w, h):
