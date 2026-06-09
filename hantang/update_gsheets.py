@@ -148,11 +148,20 @@ def _search_naver_stock(name: str):
         cached = _naver_cache[name]
         return cached[2], cached[1]   # market, code
 
-    # KOREAN_CODES에 등록된 종목은 네이버 검색 없이 즉시 반환
+    # KOREAN_CODES에 등록된 종목은 즉시 반환 (정식명칭도 조회 시도)
     if name in KOREAN_CODES:
         code = KOREAN_CODES[name]
-        _naver_cache[name] = (name, code, "KR")
-        print(f"    [사전매칭] {name} → {code} (KR)")
+        official = name
+        try:
+            url = f"https://m.stock.naver.com/api/stock/{code}/basic"
+            r = requests.get(url, timeout=3, headers={"User-Agent": "Mozilla/5.0"})
+            sn = r.json().get("stockName", "")
+            if sn:
+                official = sn
+        except Exception:
+            pass
+        _naver_cache[name] = (official, code, "KR")
+        print(f"    [사전매칭] {name} → {official}({code}) (KR)")
         return "KR", code
 
     try:
