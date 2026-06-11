@@ -1,15 +1,49 @@
-# 금융권 뉴스 모니터링 텔레그램 봇 — 인수인계 문서
+# 금융권 뉴스 모니터링 텔레그램 봇 — 인수인계 문서 v4
 
-> 최종 업데이트: 2026-06-07 (Claude Opus 세션)
-> 이전 버전: 2026-05-22 — 농협·수협 한정 시기. 이후 전 금융권으로 확장됨.
+> 최종 업데이트: 2026-06-11 (Claude 세션 — **실제 저장소 코드와 전수 대조 후 재작성**)
+> 이전 버전: v3 (2026-06-07). v3의 오류·누락을 수정하고 "후속 세션 사고 방지" 구조로 전면 개편.
+
+---
+
+## 0. ⛔ 이 문서를 읽는 AI/작업자에게 — 먼저 읽고 시작할 것
+
+**원칙 1: 코드가 진실이다. 이 문서는 지도일 뿐이다.**
+패치 전에 반드시 현재 코드를 직접 읽어라. 문서의 상수 개수·목록은 작성 시점 스냅샷이며, 이후 패치로 달라져 있을 수 있다.
+
+```bash
+git clone --depth 1 https://github.com/won3ho-max/go.git /tmp/go_deploy
+grep -n "^[A-Z_]* = \|^def " /tmp/go_deploy/news_bot/collector.py   # 구조 파악
+```
+
+**원칙 2: 추측으로 커밋하지 마라. 패치 전후로 반드시 시뮬레이션을 돌려라.**
+(§14 회귀 테스트 스니펫 — 실행 가능한 코드 제공)
+
+**원칙 3: 수정 대상은 오직 `news_bot/` 하위 파일이다.**
+저장소 루트의 `collector.py` 같은 파일을 만들거나 수정하면 배포되지 않는다. 역대 사고 1순위.
+
+### 🚫 절대 금지 (역대 사고 모음)
+
+| # | 금지 사항 | 이유 |
+|---|---|---|
+| 1 | 저장소 루트에 `collector.py`/`main.py` 두기 | deploy.yml은 `news_bot/**`만 본다. 루트 파일은 영원히 배포 안 됨 |
+| 2 | `.github/workflows/*` 수정 시도 | PAT에 workflow scope 없음 → push 거부됨 |
+| 3 | `sentv.co.kr` (서울경제TV) 차단 | 과거 실수로 차단했다가 사용자 명시 지시로 복구. **TRUSTED 유지** |
+| 4 | 짧은 단어를 KEYWORDS/WHITELIST/PROMO에 추가 | Python `in` substring 매치. `합병`→`종합병원` 오매치 실제 발생. 추가 전 §14-3 substring 점검 필수 |
+| 5 | `.env`의 `CHECK_INTERVAL_MINUTES` 수정으로 주기 변경 시도 | 무시됨. `main.py`의 `CHECK_INTERVAL = 15` 상수 직접 수정해야 함 |
+| 6 | 서버에서 직접 코드 수정 | 다음 배포 때 `git checkout origin/main`으로 덮어써짐. 반드시 git 경유 |
+| 7 | push 거부 시 `--force` | 같은 저장소를 한탕(hantang) 등 다른 시스템이 동시 커밋. `git pull --rebase origin main` 후 재푸시 |
+| 8 | `seen_articles.json`/`seen_titles.json` 임의 삭제 | 최근 24시간 기사 전부 재발송되는 폭탄. 특정 기사 재수집이 필요하면 해당 항목만 제거 |
+| 9 | 서버 `.env`의 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`/`ANTHROPIC_API_KEY` 수동 수정 | deploy.yml이 배포마다 GitHub Secrets 값으로 덮어씀. 수정해도 소용없음 (NAVER_* 키만 수동 관리) |
+| 10 | 패치 후 검증 생략 | §15 배포 후 검증 절차 필수. "커밋했으니 끝"이 빵꾸의 주범 |
 
 ---
 
 ## 1. 프로젝트 개요
 
-국내 주요 금융권(시중·지방·인터넷은행, 생·손해보험, 저축은행, 상호금융, 카드, 농협·수협) 핵심 뉴스를 자동 수집해 단일 텔레그램 채널로 발송하는 봇. **증권사·자산운용사 단독 기사는 의도적으로 제외.**
+국내 주요 금융권(시중·지방·인터넷은행, 생·손보, 저축은행, 상호금융, 카드, 농협·수협) 핵심 뉴스를 자동 수집해 텔레그램 채널로 발송하는 봇. **증권사·자산운용사 단독 기사는 의도적으로 제외** (지주 차원 그룹 기사는 포함).
 
-RSS 피드 + 네이버 뉴스 API를 폴링하고, 패턴 필터 + LLM(Claude Haiku) 이중 필터로 홍보성 기사를 걸러낸다.
+수집: Google 뉴스 RSS(33개) + 언론사 직접 RSS(6개) + 네이버 뉴스 API(13개 쿼리)
+필터: 패턴 필터(`is_relevant`) + LLM(Claude Haiku) 이중 필터
 
 ---
 
@@ -21,409 +55,384 @@ RSS 피드 + 네이버 뉴스 API를 폴링하고, 패턴 필터 + LLM(Claude Ha
 | 서버 IP | 34.50.62.215 |
 | SSH 사용자 | won3ho |
 | 서비스 관리 | `sudo systemctl restart/status news_bot` |
-| 코드 저장소 | GitHub: won3ho-max/go |
-| 배포 방식 | GitHub Actions (`.github/workflows/deploy.yml`) |
-| 배포용 로컬 클론 | `/tmp/go_deploy` |
-| PAT 권한 | workflow scope 없음 (`.github/workflows/*` 수정 불가) |
+| 서버 로그 | `/home/won3ho/bot.log` (systemd가 stdout/stderr append) |
+| 코드 저장소 | GitHub: won3ho-max/go (공개) |
+| 배포 방식 | GitHub Actions `.github/workflows/deploy.yml` |
+| 배포용 로컬 클론 | `/tmp/go_deploy` (세션마다 새로 클론 권장 — 이전 세션 잔존물 신뢰 금지) |
+| PAT 권한 | workflow scope 없음 |
 
-### ⚠️ 배포 절차 (반드시 이 경로!)
+### 저장소 동거 시스템 주의
 
-GitHub Actions의 `deploy.yml`은 다음 두 가지 조건이 모두 충족돼야 트리거된다.
+`won3ho-max/go`에는 news_bot 외에 **한탕(hantang) 주식 시스템, telegram_listener, gsheets 스크립트**가 함께 산다. 워크플로도 deploy.yml 외 5개(batch_add, daily_report, keepalive, manual_sell, telegram_listener)가 있다. **news_bot 작업 시 다른 폴더/워크플로를 건드리지 말 것.** push 충돌도 이 동거 때문에 발생한다.
 
-1. `news_bot/**` 경로의 파일이 변경됨 (`paths: news_bot/**`)
-2. main 브랜치에 push됨
+---
 
-서버에서는 `news_bot/main.py`와 `news_bot/collector.py`만 git checkout 받는다. 따라서 코드 수정은 **반드시 `news_bot/` 디렉터리 안의 파일에 적용**해야 한다.
+## 3. 배포 파이프라인 (deploy.yml 실제 동작 — v3에서 누락됐던 내용 포함)
+
+### 트리거 조건
+- main 브랜치 push + 변경 경로가 `news_bot/**` **또는** `.github/workflows/deploy.yml`
+
+### 배포 시 서버에서 일어나는 일 (전부 자동)
+1. `git checkout origin/main -- news_bot/main.py`, `news_bot/collector.py` — **이 두 파일만 동기화**. requirements.txt 등 다른 파일은 배포돼도 서버에 반영 안 됨 (필요 시 서버에서 수동 처리)
+2. `.env`의 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`(=1633958343), `ANTHROPIC_API_KEY`를 GitHub Secrets 값으로 **덮어씀**
+3. systemd 유닛 파일을 매번 새로 생성 (`WorkingDirectory=/home/won3ho/news_bot/news_bot`)
+4. `systemctl stop` + `pkill -9 -f 'news_bot/news_bot/main.py'` → 재시작 (구봇 부활 차단 2중)
+5. `BOT_RUNNING_OK` / `BOT_START_FAILED` 출력
+6. 마지막에 curl로 "배포 완료 테스트" 메시지를 **1633958343 (ADMIN 1:1)** 으로 전송
+
+### 표준 배포 절차
 
 ```bash
-# 1. 파일 수정 후 news_bot/ 하위로 복사 (절대 root에 두지 말 것)
-cp /sessions/<id>/mnt/<workspace>/collector.py /tmp/go_deploy/news_bot/collector.py
+# 0. 항상 새로 클론 (이전 세션의 /tmp/go_deploy 신뢰 금지)
+rm -rf /tmp/go_deploy && git clone https://github.com/won3ho-max/go.git /tmp/go_deploy
 
-# 2. git config 확인 후 커밋 & 푸시
+# 1. news_bot/ 하위 파일 수정 (절대 루트에 두지 말 것)
+#    수정 후 §14 회귀 테스트 통과 확인
+
+# 2. 커밋 & 푸시
 cd /tmp/go_deploy
 git config user.email "won3ho@gmail.com"
 git config user.name "won3ho"
-git add news_bot/collector.py
+git add news_bot/collector.py        # 수정한 파일만 명시적으로 add
 git commit -m "fix: ..."
 git push origin main
-```
+# 거부되면: git pull --rebase origin main && git push origin main
 
-> 다른 시스템(예: 한탕)이 같은 저장소에 동시 커밋할 수 있어 push 거부가 나면 `git pull --rebase origin main` 후 재푸시.
-
----
-
-## 3. 파일 구조
-
-```
-won3ho-max/go/                ← GitHub 저장소 루트
-├── news_bot/                 ← 봇 배포 대상 (deploy.yml이 이 폴더만 본다)
-│   ├── main.py               ← 텔레그램 봇, 스케줄러, ADMIN/BROADCAST 채널 분리
-│   ├── collector.py          ← 핵심 파일. 필터 로직 전체 위치
-│   ├── requirements.txt
-│   └── news_bot.service
-├── .github/workflows/
-│   └── deploy.yml            ← news_bot/** 변경 시 자동 배포
-└── HANDOVER.md               ← 이 문서
-```
-
-서버 측 파일 (자동 동기화되지 않음):
-```
-~/news_bot/news_bot/.env              # TELEGRAM_*, ANTHROPIC_API_KEY 등
-~/news_bot/news_bot/seen_articles.json
-~/news_bot/news_bot/seen_titles.json
+# 3. §15 배포 후 검증 (생략 금지)
 ```
 
 ---
 
-## 4. 채널·발송 구조
+## 4. 파일 구조
 
-### ADMIN_CHAT_ID vs BROADCAST_CHAT_ID 분리
+```
+won3ho-max/go/
+├── news_bot/                  ← 배포 대상 (이 폴더만)
+│   ├── main.py                ← 봇·스케줄러·채널 분리 (206줄)
+│   ├── collector.py           ← 핵심. 필터 로직 전체 (약 1,190줄)
+│   ├── requirements.txt       ← 서버 자동 반영 안 됨
+│   ├── news_bot.service       ← 참고용 (실제 유닛은 deploy.yml이 생성)
+│   └── setup.sh
+├── hantang/ 등                ← ⚠️ 다른 시스템. 건드리지 말 것
+├── .github/workflows/deploy.yml
+└── HANDOVER.md                ← 이 문서 (git에도 커밋해둘 것)
+```
+
+서버 측 (자동 동기화 안 됨):
+```
+~/news_bot/news_bot/.env                    # NAVER_* 만 수동 관리 영역
+~/news_bot/news_bot/seen_articles.json      # URL 해시, 최근 2,000개 유지
+~/news_bot/news_bot/seen_titles.json        # 제목, 최근 100개만 유지
+~/news_bot/news_bot/pending_articles.json   # 수면시간 큐
+~/news_bot/news_bot/.bot.lock               # fcntl 단일 인스턴스 잠금
+~/bot.log                                   # 서비스 로그
+```
+
+---
+
+## 5. 채널·발송 구조
 
 ```python
 # main.py 상단
-ADMIN_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')   # 1633958343 (won3ho 1:1)
-BROADCAST_CHAT_ID = '-1003717850867'             # 금융 뉴스 모니터링(MTN) 채널
+ADMIN_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')    # 1633958343 (won3ho 1:1)
+BROADCAST_CHAT_ID = '-1003717850867'              # 금융 뉴스 모니터링(MTN) 채널 — 하드코딩
+CHAT_ID = BROADCAST_CHAT_ID                       # 하위 호환 별칭
+CHECK_INTERVAL = 15                               # 분. .env 값 무시
 ```
 
-| 경로 | 발송 대상 |
-|---|---|
-| 30분→**15분** 폴링으로 수집한 새 뉴스 | **BROADCAST** (채널) |
-| 06:00 일괄 발송 (새벽 쌓인 뉴스) | **BROADCAST** (채널) |
-| 15:00 하트비트 | **ADMIN** (1:1) |
-| 배포 완료 알림 (deploy.yml) | **ADMIN** (1:1, chat_id=1633958343 하드코딩) |
-| `/news`, `/start`, `/status` 응답 | 명령 입력한 사람의 채팅창 |
+| 경로 | 대상 | 건수 제한 |
+|---|---|---|
+| 15분 폴링 새 뉴스 | BROADCAST 채널 | **회당 최대 10건** (초과분 유실 — §13-1) |
+| 06:00 일괄 발송 (수면 큐) | BROADCAST 채널 | 제한 없음 |
+| 15:00 하트비트 | ADMIN 1:1 | — |
+| 배포 완료 알림 | ADMIN 1:1 (deploy.yml 하드코딩) | — |
+| `/news` `/start` `/status` | 명령 입력자 채팅창 | /news는 최대 5건 |
 
-채널 ID는 `deploy.yml`로 이전하려면 PAT workflow scope 필요 — 우선 `main.py`에 하드코딩.
+- 수면시간 22:00~06:00 KST: 발송 대신 `pending_articles.json` 큐잉 → 06:00 일괄 발송
+- 단일 인스턴스 잠금(fcntl): 중복 기동 시 두 번째 프로세스 즉시 종료
 
 ---
 
-## 5. main.py 주요 동작
+## 6. 환경변수 (서버 `.env`)
 
-- `CHECK_INTERVAL = 15` (분, 코드 상수). `.env`의 `CHECK_INTERVAL_MINUTES`는 무시. 변경 시 코드 직접 수정.
-- 수면시간(22:00~06:00 KST)에는 `pending_articles.json`에 큐잉 → 06:00 일괄 발송
-- `/news` 명령어로 즉시 수동 수집 가능
-- 매일 15:00 KST 하트비트 (ADMIN_CHAT_ID로만)
-- 단일 인스턴스 잠금 (fcntl) — 구봇 부활 원천 차단
+```
+TELEGRAM_BOT_TOKEN=...       # deploy.yml이 매번 덮어씀 (Secrets: NH_BOT_TOKEN)
+TELEGRAM_CHAT_ID=1633958343  # deploy.yml이 매번 덮어씀
+ANTHROPIC_API_KEY=...        # deploy.yml이 매번 덮어씀 — LLM 필터용
+NAVER_CLIENT_ID=...          # ★수동 관리. 없으면 네이버 수집 조용히 스킵
+NAVER_CLIENT_SECRET=...      # ★수동 관리
+CHECK_INTERVAL_MINUTES=...   # 무시됨 (코드 상수 우선)
+```
+
+**LLM 필터는 fail-open**: `ANTHROPIC_API_KEY` 미설정 또는 API 오류 시 **무조건 통과**시킨다. "갑자기 PR이 쏟아진다" → API 키/크레딧 상태부터 의심 (§13-4).
 
 ---
 
-## 6. 환경변수 (`.env` — 서버에만 존재)
-
-```
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=1633958343  # ADMIN — deploy.yml이 매번 덮어쓰므로 직접 수정 불필요
-ANTHROPIC_API_KEY=...        # Claude Haiku LLM 필터용
-NAVER_CLIENT_ID=...          # 네이버 뉴스 API (선택)
-NAVER_CLIENT_SECRET=...      # 네이버 뉴스 API (선택)
-CHECK_INTERVAL_MINUTES=...   # 무시됨 (코드 하드코딩)
-```
-
----
-
-## 7. 메시지 포맷 (format_article)
+## 7. 메시지 포맷 (`format_article`)
 
 ```
 <제목 (굵게)>
-표출날짜 (예: 5월 26일 오전 10:30)
-표출매체명
+5월 26일 오전 10:30      ← KST 변환 (_to_kst_str)
+매체명                    ← _extract_media
 링크
 ```
 
-매체명은 다음 순서로 추출:
-1. 제목 뒤 ` - 매체명` 또는 ` | 매체명` 패턴
-2. RSS feed의 `entry.source.title` (Google RSS) 또는 `feed.feed.title`
-3. URL 도메인 (예: `hankyung.com`)
+매체명 우선순위: ① `entry.source.title`(Google RSS) / `feed.feed.title` → ② 제목 뒤 ` - 매체명`·` | 매체명` 패턴 → ③ URL 도메인. (코드상 source가 있으면 제목 패턴보다 **우선**)
 
 ---
 
-## 8. collector.py 필터링 구조
-
-### 필터 실행 순서
+## 8. collector.py 필터 파이프라인
 
 ```
-[수집] RSS 피드 / 네이버 API
+[수집] RSS 39개 피드 → 네이버 API 13개 쿼리 (이 순서로 실행, seen 공유)
+  ↓
+[0] 24시간 컷오프 — 발행 24h 경과 기사 제외 (파싱 실패 시 통과)
   ↓
 [1] _is_blocked_source(url, source_name)
-    → BLOCKED_DOMAINS 또는 BLOCKED_SOURCE_NAMES 해당하면 즉시 차단
+    BLOCKED_DOMAINS(도메인 substring) / BLOCKED_SOURCE_NAMES(Google RSS 소스명)
+    ⚠️ 네이버 API 경로는 source_name 인자 없이 호출 → 도메인 차단만 적용 (§13-5)
   ↓
 [2] is_relevant(title, summary)
-    ├── 제목 KEYWORDS 매치 → 통과
-    ├── 예외 a) '금고' 단독 + 본문 KEYWORDS → 통과 (지자체 금고)
-    ├── 예외 b) 제목에 CLICKBAIT_PRODUCT_HINTS + 본문 KEYWORDS → 통과 (클릭베이트)
-    ├── 예외 c) 제목에 [단독] + 본문 KEYWORDS → 통과 (단독 취재 fallback)
-    ├── STRUCTURAL_PROMO_PATTERNS 해당 → 차단
-    ├── PROMO_KEYWORDS 해당 → 차단
-    ├── SCOOP_TAGS([단독]/[단독보도]만, [속보] 제외) → 통과
-    ├── 제목 WHITELIST 매치 → 통과
-    ├── 클릭베이트/단독 fallback이면 본문 WHITELIST 또는 본문 KEYWORDS 2+ 매치 → 통과
-    └── 그 외 → 차단
+    1단계: 제목 KEYWORDS 매치 필수. 예외 fallback 3종:
+      a) '금고' 단독(새마을금고 제외) + 본문 KEYWORDS
+      b) 제목 CLICKBAIT_PRODUCT_HINTS + 본문 KEYWORDS
+      c) 제목 [단독]/[단독보도] + 본문 KEYWORDS
+    2단계: STRUCTURAL_PROMO_PATTERNS 매치 → 차단
+    3단계: PROMO_KEYWORDS 매치 → 차단
+    4단계: [단독]/[단독보도] 태그 → 즉시 통과 ([속보]는 제외됨)
+    5단계: 제목 WHITELIST_KEYWORDS 매치 → 통과
+    5-A: fallback 기사는 본문 WHITELIST 또는 본문 KEYWORDS 2개 이상 → 통과
+    6단계: 기본 차단
   ↓
-[3] LLM 필터 (_llm_filter)
-    조건: not _is_trusted_source(url) OR _has_exec_name(title) OR _is_clickbait_pass(title)
-    → 신뢰 출처라도 경영진 실명 또는 클릭베이트면 LLM 강제 검증
+[3] LLM 필터 (_llm_filter — claude-3-5-haiku-20241022, YES/NO, max_tokens=5)
+    실행 조건: 비신뢰 출처 OR 제목에 EXEC_NAMES OR _is_clickbait_pass(title)
+    캐시: 프로세스 메모리 dict (재시작 시 초기화 — 재시작 직후 LLM 호출 급증 정상)
+    fail-open: 키 없음/오류 시 통과
   ↓
 [4] 중복 체크
-    → get_article_id(url, title): URL 해시 기반
-    → _is_similar_title(): 핵심 단어 3개 이상 겹치면 유사 기사로 차단
+    get_article_id: URL ?쿼리 제거 후 md5(url+title)
+    _is_similar_title: 제목 완전일치 즉시 차단 + 핵심단어(2자 이상, substring 매치 포함)
+                       3개 이상 겹치면 차단. 비교 대상은 최근 100개 제목뿐
 ```
 
-### 주요 상수 위치
+### 주요 상수 (2026-06-11 코드 실측값 — 작업 시점에 재확인할 것)
 
-| 상수 | 역할 |
-|------|------|
-| `TRUSTED_DOMAINS` | LLM 체크 면제 신뢰 도메인 (107개) |
-| `BLOCKED_DOMAINS` | 즉시 차단 도메인 |
-| `BLOCKED_SOURCE_NAMES` | Google RSS 우회 시 소스명 기반 차단 |
-| `EXEC_NAMES` | 경영진 실명 (LLM 강제 트리거) |
-| `KEYWORDS` | 1차 게이트 — 금융사·기관·통칭 키워드 약 130종 |
-| `CLICKBAIT_PRODUCT_HINTS` | 본문 fallback 트리거 (펀드/예금/대출/카드/주담대 등) |
-| `WHITELIST_KEYWORDS` | 통과 조건 키워드 (실적·인사·비리·자본 등) |
-| `STRUCTURAL_PROMO_PATTERNS` | 구조적 홍보 패턴 (PR 어구·시리즈 태그) |
-| `PROMO_KEYWORDS` | 블랙리스트 키워드 (출시·MOU·수상 등) |
-| `RSS_FEEDS` | 수집 피드 목록 |
-| `NAVER_SEARCH_QUERIES` | 네이버 API 검색 쿼리 |
+| 상수 | 개수 | 역할 |
+|------|---|------|
+| `TRUSTED_DOMAINS` | 107 | LLM 면제 신뢰 도메인 |
+| `BLOCKED_DOMAINS` | 10 | 즉시 차단 도메인 |
+| `BLOCKED_SOURCE_NAMES` | 18 | Google RSS 소스명 차단 |
+| `EXEC_NAMES` | 6 | 강호동·박서홍·이찬우·강태영(농협) / 노동진·신학기(수협) — LLM 강제 |
+| `KEYWORDS` | 159 | 1차 게이트 (금융사·기관·통칭) |
+| `WHITELIST_KEYWORDS` | 179 | 통과 키워드 (실적·인사·비리·자본 등) |
+| `STRUCTURAL_PROMO_PATTERNS` | 384 | 구조적 홍보 패턴 |
+| `PROMO_KEYWORDS` | 322 | 블랙리스트 |
+| `CLICKBAIT_PRODUCT_HINTS` | 18 | 본문 fallback 트리거 |
+| `RSS_FEEDS` | 39 | 수집 피드 |
+| `NAVER_SEARCH_QUERIES` | 13 | 네이버 API 쿼리 |
 
-### 수집 범위 (KEYWORDS)
+개수 확인 명령:
+```bash
+cd /tmp/go_deploy/news_bot && python3 -c "
+import collector as c
+for n in ['TRUSTED_DOMAINS','BLOCKED_DOMAINS','BLOCKED_SOURCE_NAMES','KEYWORDS','WHITELIST_KEYWORDS','STRUCTURAL_PROMO_PATTERNS','PROMO_KEYWORDS','RSS_FEEDS','NAVER_SEARCH_QUERIES','CLICKBAIT_PRODUCT_HINTS']:
+    print(n, len(getattr(c,n)))"
+```
 
-- **농협 계열**: 농협, NH농협, 농협은행/중앙회/금융/생명/손해보험/카드
-- **수협 계열**: 수협, Sh수협, 수협은행/중앙회/금융/캐피탈/증권/개발
-- **5대 금융지주**: KB금융, 신한금융, 하나금융, 우리금융, NH농협금융 + 각 지주명
-- **시중은행 5사**: KB국민/신한/하나/우리/IBK기업
-- **지방 금융지주·은행**: BNK금융(부산/경남), DGB는 iM금융지주/iM뱅크로 사명 변경, JB금융(광주/전북), 제주은행, SC제일, 한국씨티
-- **인터넷전문은행**: 카카오뱅크, 토스뱅크, 케이뱅크
-- **생명보험 14사**: 삼성/한화/교보/신한라이프/KB라이프/미래에셋/동양/흥국/ABL/iM라이프/AIA/메트라이프/푸르덴셜/하나생명
-- **손해보험 10사**: 삼성화재, DB손해보험, 현대해상, KB손해보험, 메리츠화재, 한화/롯데/흥국/MG/캐롯
-- **저축은행 8사**: SBI/OK/페퍼/웰컴/한국투자/JT친애/OSB + 중앙회
-- **상호금융**: 신협(중앙회), 새마을금고(중앙회)
-- **카드 9사**: 신한/KB국민/삼성/현대/롯데/우리/하나/BC + '카드사'
-- **규제·정책·중앙은행**: 금감원, 금융감독원, 금융위(원회), 예금보험공사, 한국은행, 금융통화위원회(금통위), 금융결제원, 한국거래소(KRX), 코스콤, 한국예탁결제원
-- **금융 협·단체**: 은행연합회, 여신금융협회(여신협회/화보협회), 생명보험협회(생보협회), 손해보험협회(손보협회), 한국금융연구원, 보험연구원
-- **통칭**: 시중은행, 지방은행, 인터넷전문은행, 5대 금융지주, 금융지주, 저축은행, 상호금융, 5대 은행, 4대 은행, 금융권, 은행권, 보험권, 금융사고
-- **업종 주식 통칭**: 금융주, 은행주, 보험주, 카드주, 저축은행주, 지주주
-- **정부·정책 프로그램**: 국민성장펀드, 국민참여성장펀드, 생산적 금융, 포용금융, NH 상생성장 프로젝트
-- **칼럼 시리즈 태그**: [금융 히스토리], [금융 인사이트], [금융 풍속도], [금융 IN], [금융 NOW], [CEO 라운지]
+### 수집 범위 (KEYWORDS 분류 — 상세 목록은 코드 참조)
 
-### EXEC_NAMES (LLM 강제 검증 대상)
-
-- 농협: 강호동, 박서홍, 이찬우, 강태영
-- 수협: 노동진, 신학기
-
-### CLICKBAIT_PRODUCT_HINTS
-
-펀드, 예금, 적금, 대출, 신상품, 금융상품, 카드, 보험, 신탁, 주담대, 주택담보대출, 전세대출, 신용대출, 갈아타기, 회장 복귀, 회장직 복귀, 이사장 후보, 이사장 선출
+농협·수협 계열 전체 / 5대 금융지주 / 시중은행 5사 / 지방 금융지주·은행(BNK·iM(구 DGB)·JB·제주·SC제일·씨티) / 인터넷은행 3사 / 생보 14사 / 손보 10사 / 저축은행 8사+중앙회 / 신협·새마을금고 / 카드 9사 / 규제·정책기관(금감원·금융위·예보·한은·금통위·금결원·KRX·코스콤·예탁원) / 협단체(은행연합회·여신협회·생보협회·손보협회·금융연구원·보험연구원) / 통칭(금융권·은행권·보험권·금융사고 등) / 업종 주식(금융주·은행주 등) / 정책 프로그램(국민성장펀드·생산적 금융 등) / 칼럼 시리즈 태그([금융 히스토리] 등)
 
 ---
 
-## 9. RSS 피드 구성
+## 9. RSS·네이버 수집 구성
 
-```python
-# Google 뉴스 — 농협·수협 계열
-- 농협 / NH농협은행 / 농협중앙회 / 농협금융 검색
-- 농협+site:news.mtn.co.kr (MTN 전용 — 딜레이 있음)
-- 강호동/박서홍/이찬우/강태영 + 농협 (경영진 실명)
-- 수협 / 수협중앙회 / Sh수협은행
-- 노동진/신학기 + 수협
-
-# Google 뉴스 — 5대 금융지주 그룹 차원
-- KB금융지주, 신한금융지주, 하나금융지주, 우리금융지주
-
-# Google 뉴스 — 인터넷전문은행
-- 카카오뱅크, 토스뱅크, 케이뱅크
-
-# Google 뉴스 — 업종별 검색
-- 손해보험+실적, 생명보험+실적, 저축은행+건전성, 카드사+실적
-
-# Google 뉴스 — 규제·정책 기관
-- 금융감독원, 금융위원회, 예금보험공사
-
-# 직접 RSS (언론사별)
-- 연합뉴스 (economy/society/industry), 뉴시스 (economy/bank)
-- 매일경제, 머니투데이, 파이낸셜뉴스, 서울경제, 아시아경제
-```
+**Google 뉴스 RSS (33)**: 농협 4 + MTN 전용(site:news.mtn.co.kr) 1 + 농협 경영진 실명 4 + 수협 3 + 수협 경영진 2 + 5대 지주 4 + 인터넷은행 3 + 업종 검색(손보/생보 실적·저축은행 건전성·카드사 실적) 4 + 규제기관(금감원·금융위·예보) 3 + 기타
+**직접 RSS (6개사)**: 연합뉴스(economy/society/industry), 뉴시스(economy/bank), 매일경제, 머니투데이, 파이낸셜뉴스(economy/finance), 서울경제(finance), 아시아경제(economy)
+**네이버 API (13 쿼리)**: 농협 4·수협 3·지주 4·금감원·금융위 — 회당 20건, 최신순. `originallink` 우선 사용
 
 ---
 
 ## 10. LLM 프롬프트 (`_llm_filter`)
 
-모델: `claude-3-5-haiku-20241022`, YES/NO 이진 판단 (max_tokens=5)
+모델 `claude-3-5-haiku-20241022`, 이진 판단. 프롬프트 전문은 코드 144~216행 참조 (수정 시 코드가 기준).
 
-**YES 통과 카테고리:**
-- 금융 실적 (순이익·영업이익·자산·대출 등)
-- 금감원·금융위 규제, 법령 개정, 제재
-- 주요 인사 (행장·대표이사 취임·해임·사퇴)
-- 비리·수사 (횡령·배임·압수수색·검찰)
-- 시장 분석 (금리·부실·연체·건전성)
-- 유상증자·자본 확충·출자·자본정책 (CET1·RWA 등)
-- 농협 지배구조·선출제도 변경
-- 중앙회장·행장의 주요 정책 공식 발표
-- 경영진 비판 보도
+**YES**: 실적 / 규제·제재 / 주요 인사 / 비리·수사 / 시장·건전성 분석 / 증자·자본정책(CET1·RWA) / 농협 지배구조·선출제도 / 중앙회장·행장 정책 발표 / 경영진 비판 보도
 
-**NO 차단 카테고리:**
-- TV광고·모델·브랜드 홍보
-- 감사패·수상·시상식
-- 피해농가·피해어가 지원, 농촌·어촌 봉사, 모내기·어업 봉사
-- 협약·MOU 체결
-- 교육·캠페인·이벤트·행사
-- 지역사회 활동
-- 전기차·농산물·축산·수산물·어업 활동 등 금융 무관
-- 지방선거·정치
-- **증권사·자산운용사 단독 기사** (지주 차원 그룹 기사는 YES)
-- 경영 비전 선포 홍보 (상생성장, 돈길 튼다 등)
-- 칼럼·기고 시리즈 (금융기업가정신 등)
-- IT 인프라·시스템 (감리원 확충 등)
-- 내부통제 행사·회의 개최
-- 신규 금융상품 출시·홍보 (인기·완판·매진·페이백 강조)
-  - 단, 정부 공적 펀드의 시장 반응은 YES
-- **지역 단위 농협·축협·수협 PR** (XX농협 OO 돌파/달성)
-- **행장·임원 현장 방문·동정** (스타트업 방문·간담회 등)
-- **사회공헌 일자리 확대** (장애인 일터·굿윌스토어·발달장애인 고용)
-- **자산관리 세미나·머니쇼 등 행사 개최**
+**NO**: 광고·모델·브랜드 / 수상·감사패 / 1차산업 현장 활동·봉사 / MOU·협약 / 교육·캠페인·행사 / 지역사회 활동 / 금융 무관(농산물·전기차 등) / 정치·선거 / **증권·운용 단독**(지주 동반 기사는 YES) / 상품 출시 홍보(공적 펀드 시장 반응은 YES) / 지역 단위 농·축·수협 PR / 행장·임원 동정 / ESG 일자리 홍보 / 세미나·머니쇼 / 비전 선포 클리셰 / 칼럼·기고 시리즈 / IT 인프라 행정 / 내부통제 행사 개최
+
+프롬프트 수정 시: NO 카테고리에 구체 예시를 함께 넣는 방식이 효과적 (기존 패턴 유지).
 
 ---
 
-## 11. 차단 도메인·소스 (BLOCKED)
+## 11. 차단 목록 (BLOCKED)
 
-**BLOCKED_DOMAINS:**
-- youngnong.co.kr, pinpointnews.co.kr, newsworker.co.kr, thefirstmedia.net
-- gukjenews.com, jndn.com, woryesanup.co.kr, newsquest.co.kr
-- insnews.co.kr (보험뉴스 — IT 인프라 홍보)
-- aflnews.co.kr (농수축산 전문지 — 스마트팜·축협 행사)
+**BLOCKED_DOMAINS (10)**: youngnong.co.kr, pinpointnews.co.kr, newsworker.co.kr, thefirstmedia.net, gukjenews.com, jndn.com, woryesanup.co.kr, newsquest.co.kr, insnews.co.kr, aflnews.co.kr
 
-**BLOCKED_SOURCE_NAMES (Google RSS 소스명):**
-- 핀포인트뉴스, 영농뉴스, 원예산업신문, 뉴스워커, 더퍼스트미디어,
-- 국제뉴스, 전남도민뉴스, 뉴스퀘스트, 시민행정신문, 경기경제신문,
-- 안전신문, 농수축산신문, 일간경기, gmitoday, 위즈뉴스, 투데이안,
-- 뉴스포스트 (반부패·청렴 행사), 팜인사이트 (한우·축산 PR)
+**BLOCKED_SOURCE_NAMES (18)**: 핀포인트뉴스, 영농뉴스, 원예산업신문, 뉴스워커, 더퍼스트미디어, 국제뉴스, 전남도민뉴스, 뉴스퀘스트, 시민행정신문, 경기경제신문, 안전신문, 농수축산신문, 일간경기, gmitoday, 위즈뉴스, 투데이안, 뉴스포스트, 팜인사이트
+
+⚠️ 도메인 차단도 substring 매치다. 짧은 도메인 추가 시 다른 도메인에 포함되는지 확인.
 
 ---
 
-## 12. 패치 이력 (2026-05-22 이후 누적 요약)
+## 12. 패치 이력 요약 (상세는 v3 / git log)
 
-### 2026-05-22 ~ 23 — 수협 + 전 금융권 확장
-- 농협·수협 → 시중은행·지방은행·인터넷뱅크·생/손보·저축은행·상호금융·카드·규제기관 통합
-- EXEC_NAMES에 수협 경영진 노동진·신학기 추가
-- 증권·운용사는 KEYWORDS에 미포함 → 1단계 게이트에서 자동 차단, 지주 차원 그룹 기사는 통과
-
-### 2026-05-22 — DGB → iM 사명 변경
-- iM금융지주, iM뱅크, iM라이프 / 대구은행은 legacy로 유지
-
-### 2026-05-23 — 채널·1:1 분리 + 15분 폴링
-- BROADCAST_CHAT_ID (채널), ADMIN_CHAT_ID (1:1) 분리
-- 폴링 주기 30→15분 (LLM 캐시로 비용 영향 미미)
-
-### 2026-05-23 — 금융 협단체·중앙은행
-- 한국은행/금통위, 금융결제원/한국거래소/KRX, 은행연합회/여신금융협회/생/손보협회
-
-### 2026-05-23 — 클릭베이트 fallback 도입
-- 제목에 CLICKBAIT_PRODUCT_HINTS만 있고 본문에 KEYWORDS 매치 시 통과
-- 신뢰 출처라도 클릭베이트 fallback이면 LLM 강제 검증
-
-### 2026-05-23 — SGI 보도자료·코스닥 속보 차단
-- STRUCTURAL: 연차총회, 협력 강화, 코스피/코스닥 마감
-- SCOOP_TAGS에서 [속보] 제거 (내용 없는 마감 보도)
-
-### 2026-05-25 — aflnews 차단 + MTN 칼럼 통과
-- aflnews.co.kr 도메인 차단
-- MTN [금융 히스토리] 등 정통 칼럼 시리즈 태그를 KEYWORDS+WHITELIST에 추가
-
-### 2026-05-26 — 묶음 PR 시리즈 + 합병 substring 버그 + 메시지 포맷
-- [이모저모], [카드레터] 등 묶음 PR 시리즈 태그 차단
-- WHITELIST `합병` → `종합병원` substring 매치 버그 해결 (인수합병 등 구체 어구로)
-- format_article 아이콘 제거, 매체명 라인 추가
-
-### 2026-05-26 — 아침자 누락 7건 종합 패치
-- KEYWORDS: 금융권, 은행권, 보험권, 금융사고, 화보협회
-- CLICKBAIT_HINTS: 주담대, 주택담보대출, 전세대출, 신용대출, 회장 복귀
-- PROMO 정밀화: 제휴 카드 단독 → 출시·혜택 결합 어구만
-- [단독] + 본문 KEYWORDS fallback 룰 추가
-- WHITELIST: 역풍, 셈법, 딜레마, 난감 (비즈니스 분석 어구)
-
-### 2026-05-27 — [한 컷] 동정 + 장애인 맞춤지원
-- STRUCTURAL: [한 컷], [현장], [사진], [화보]
-- 장애인 맞춤·재활부터·통합 지원체계
-
-### 2026-05-31 — 금융주/은행주 KEYWORDS
-- 시장분석 기사 누락 대응 (MTN 팔천피 금융주)
-
-### 2026-05-31 — 12건 누락 PR 종합
-- [그래픽], [이주의 시리즈, 머니쇼, 굿윌스토어, 발달장애인 일자리
-- 행장 동정 어구 (현장이 답이다, 소통 통해, 동반자 역할)
-- 정기예금 PR (개월 최고 연, 최고 연 3./4./5.)
-- LLM NO 카테고리에 지역 농협 PR·행장 동정·사회공헌 일자리 명시
-
-### 2026-06-07 — 강원농협·금감원 점검·시니어 카드
-- 지역 농협 자랑 (전국 두번째, 여신 선도, 건전 여신)
-- 행정 점검 클릭베이트 (점검 나선, 나선 이유는, 특사경과)
-- 카드 시리즈 ([1분 어드바이스], 액티브 시니어, 시니어 전용카드)
+- **05-22~23**: 농협·수협 → 전 금융권 확장, DGB→iM 사명 변경, 채널/1:1 분리, 폴링 30→15분, 협단체·한은 추가, 클릭베이트 fallback 도입, [속보] SCOOP 제외
+- **05-25~27**: aflnews 차단, MTN 칼럼 시리즈 통과, 묶음 PR 태그 차단, `합병`↔`종합병원` substring 버그 수정, 메시지 포맷 개편, [단독] fallback, 동정·화보 패턴 차단
+- **05-31**: 금융주/은행주 KEYWORDS, 12건 누락 PR 종합 패치 (행장 동정 어구, 정기예금 PR 패턴, LLM NO 카테고리 보강)
+- **06-07**: 지역 농협 자랑 어구, 행정 점검 클릭베이트, 시니어 카드 시리즈 차단
 
 ---
 
-## 13. 알려진 한계 및 주의사항
+## 13. ⚠️ 알려진 한계·함정 (v4에서 코드 대조로 확인된 것 포함)
 
-### 키워드 기반 필터의 한계
-PR 패턴이 무한히 변형되어 사용자가 발견할 때마다 패치 필요 ("두더지 잡기"). 대안으로 모든 기사에 LLM을 통과시키는 방안 검토했으나, 사용자 결정으로 현재 키워드 기반 유지.
+### 13-1. 폴링 발송 10건 제한 — 기사 유실 (v3 미기재, 잠재 빵꾸)
+`scheduled_check`는 `articles[:10]`만 발송한다. 그런데 `fetch_new_articles()`가 이미 전부 seen 처리했으므로 **11번째 이후 기사는 영구 미발송**. 한 사이클에 10건 넘게 수집되는 날(아침 첫 폴링, 재시작 직후) 누락이 생긴다. "필터는 통과했는데 채널에 안 왔다"면 이것부터 의심. `/news`도 동일 구조로 `[:5]`.
 
-### 신뢰 출처(TRUSTED_DOMAINS)의 허점
-107개 신뢰 출처는 LLM을 면제받지만, 클릭베이트 fallback과 경영진 실명일 때는 LLM 강제 실행. PR 새는 통로는 주로 신뢰 출처 + STRUCTURAL/PROMO 미매치 조합.
+### 13-2. `/news` 명령이 채널 발송분을 가로챔 (v3 미기재)
+`/news`는 `fetch_new_articles()`를 직접 호출해 seen을 소모한다. 수집된 기사는 **명령 입력자 채팅창에만** 표시되고(최대 5건) 채널에는 영원히 안 나간다. 사용자가 /news를 자주 치면 채널 누락처럼 보인다.
 
-### 부분 문자열 매치 위험
-Python `in` 연산자 substring 매치라 `합병` ↔ `종합병원` 같은 오매치 가능. 단어 추가 시 다른 단어의 substring으로 작동하는지 점검 필수.
+### 13-3. 두더지 잡기 구조
+PR 패턴은 무한 변형. 전 기사 LLM 통과 방안은 검토했으나 **사용자 결정으로 키워드 기반 유지**. 패치는 §16 SOP대로.
 
-### Google RSS 딜레이
-발행 직후 Google RSS에 즉시 반영되지 않는 경우 있음. 특히 MTN은 직접 RSS 없어 Google에 의존. 경영진 실명 RSS·네이버 API로 보완하나 완벽하지 않음.
+### 13-4. LLM fail-open + 휘발성 캐시
+API 키 미설정·오류·크레딧 소진 시 LLM은 전부 통과 처리. PR이 갑자기 새면 `~/bot.log`에서 "LLM 필터 오류" 확인. 캐시는 메모리라 재시작 시 초기화 → 재시작 직후 API 호출 급증은 정상.
 
-### 중복 탐지 민감도
-`_is_similar_title()` min_matches=3 — 핵심 단어 3개 이상 겹치면 유사 기사로 차단. 너무 민감하면 다른 관점의 기사 함께 차단될 수 있음.
+### 13-5. 네이버 경로는 소스명 차단 미적용 (v3 미기재)
+네이버 수집에서 `_is_blocked_source(url)`로 호출 — `BLOCKED_SOURCE_NAMES`가 안 먹는다. 도메인 차단만 유효. 차단했는데 계속 나오는 매체가 있으면 유입 경로가 네이버인지 확인하고 **도메인을 BLOCKED_DOMAINS에 추가**해야 한다.
 
-### 24시간 컷오프
-RSS 수집 시 발행 후 24시간 이상 지난 기사는 자동 제외. 발견이 늦은 기사는 패치해도 다시 수집되지 않음.
+### 13-6. substring 매치 전반
+KEYWORDS/WHITELIST/PROMO/STRUCTURAL/도메인 전부 `in` 연산. 추가 전 §14-3 점검 필수.
+
+### 13-7. 중복 탐지의 양면성
+`_is_similar_title` min_matches=3, 단어끼리도 substring 매치. 너무 민감하면 다른 관점 후속 기사까지 차단. 반대로 비교 대상이 **최근 100개 제목뿐**이라 100건 이상 흐른 뒤 재등장 기사는 통과 (article_id가 같으면 그쪽에서 잡힘).
+
+### 13-8. 24시간 컷오프
+발행 24h 경과 기사는 수집 제외. **늦게 발견한 누락 기사는 패치해도 재수집되지 않는다.** 패치는 "다음에 비슷한 기사가 올 때"를 위한 것 — 사용자에게 이 점을 명확히 할 것.
+
+### 13-9. Google RSS 딜레이
+MTN 등 직접 RSS 없는 매체는 Google 의존이라 반영 지연 가능. 경영진 실명 RSS·네이버 API로 보완 중이나 완벽하지 않음.
+
+### 13-10. requirements.txt는 배포로 반영 안 됨
+deploy.yml은 main.py·collector.py만 checkout. 새 패키지 의존성 추가 시 서버 SSH로 직접 `pip install` 필요.
 
 ---
 
-## 14. 유지보수 가이드
+## 14. 패치 전 필수 회귀 테스트 (복붙 실행용)
 
-### 새 PR 기사 패치 요청 시
+### 14-1. 문제 기사 역추적 — 어느 단계에서 통과/차단됐나
 
-1. 시뮬레이션으로 어느 단계에서 통과했는지 역추적
-   ```python
-   from collector import is_relevant, KEYWORDS, STRUCTURAL_PROMO_PATTERNS, PROMO_KEYWORDS, WHITELIST_KEYWORDS, CLICKBAIT_PRODUCT_HINTS, _is_trusted_source, _is_clickbait_pass
-   ```
-
-2. 패치 위치 결정
-   - 매체 자체 문제 → BLOCKED_DOMAINS / BLOCKED_SOURCE_NAMES
-   - 제목에 명확한 PR 패턴 → STRUCTURAL_PROMO_PATTERNS
-   - 단독 키워드 차단 가능 → PROMO_KEYWORDS
-   - LLM 오판 → LLM 프롬프트 NO 카테고리 보완
-
-3. 새 누락 기사 패치 요청 시
-   - KEYWORDS 누락? → KEYWORDS 추가
-   - 본문 fallback 필요? → CLICKBAIT_PRODUCT_HINTS 추가
-   - WHITELIST 누락? → WHITELIST 추가
-
-4. 패치 시 주의사항
-   - STRUCTURAL 패턴이 정상 기사 오차단하지 않는지 확인
-   - `sentv.co.kr` (서울경제TV)는 BLOCKED 금지 — 과거 실수로 사용자 명시 지시
-   - WHITELIST에서 키워드 제거 시 의존 기사 함께 차단되는지 점검
-   - 새 KEYWORDS가 다른 단어의 substring으로 매치되는지 확인
-   - **반드시 `news_bot/collector.py`를 수정**
-
-### 배포 후 검증
-
-git push 후 GitHub Actions 워크플로(`deploy.yml`) 자동 실행. 배포 완료 메시지는 ADMIN_CHAT_ID(1:1)로만 전송.
-
-직접 확인:
 ```bash
-ssh won3ho@34.50.62.215 "sudo systemctl status news_bot"
+cd /tmp/go_deploy/news_bot && python3 -c "
+from collector import *
+title = '여기에 문제 기사 제목'
+summary = '본문 요약 (없으면 빈 문자열)'
+url = 'https://기사URL'
+print('blocked_source:', _is_blocked_source(url, ''))
+print('title KEYWORDS:', [k for k in KEYWORDS if k in title])
+print('STRUCTURAL hit:', [p for p in STRUCTURAL_PROMO_PATTERNS if p in title])
+print('PROMO hit:', [k for k in PROMO_KEYWORDS if k in title])
+print('WHITELIST hit:', [k for k in WHITELIST_KEYWORDS if k in title])
+print('is_relevant:', is_relevant(title, summary))
+print('trusted:', _is_trusted_source(url))
+print('needs_llm:', not _is_trusted_source(url) or _has_exec_name(title) or _is_clickbait_pass(title))
+"
 ```
 
-GitHub Actions 로그에서 `BOT_RUNNING_OK` 확인:
+### 14-2. 패치 후 — 표적 기사 차단 + 정상 기사 오차단 없음 확인
+
 ```bash
-curl -s -H "Authorization: token <PAT>" "https://api.github.com/repos/won3ho-max/go/actions/runs?per_page=1"
+cd /tmp/go_deploy/news_bot && python3 -c "
+from collector import is_relevant
+# (제목, 기대값) — 표적 PR은 False, 정상 기사 샘플은 True 유지돼야 함
+cases = [
+    ('차단하려는 PR 기사 제목', False),
+    ('NH농협은행, 3분기 순이익 5000억', True),
+    ('금감원, 저축은행 PF 부실 점검 착수', True),
+    ('[단독] 우리금융 회장 교체 검토', True),
+    ('KB금융, 1조원 유상증자 결정', True),
+]
+fails = [(t, e, is_relevant(t)) for t, e in cases if is_relevant(t) != e]
+print('ALL PASS' if not fails else fails)
+"
+```
+
+### 14-3. 새 키워드 substring 충돌 점검 (추가 전 무조건)
+
+```bash
+cd /tmp/go_deploy/news_bot && python3 -c "
+new_kw = '추가하려는 키워드'
+# 이 키워드를 포함하는 정상 단어가 떠오르는지 + 기존 목록과의 포함 관계 확인
+from collector import KEYWORDS, WHITELIST_KEYWORDS, PROMO_KEYWORDS, STRUCTURAL_PROMO_PATTERNS
+for name, lst in [('KEYWORDS',KEYWORDS),('WHITELIST',WHITELIST_KEYWORDS),('PROMO',PROMO_KEYWORDS),('STRUCTURAL',STRUCTURAL_PROMO_PATTERNS)]:
+    hits = [k for k in lst if new_kw in k or k in new_kw]
+    if hits: print(name, hits)
+"
+```
+머릿속 점검도 병행: `합병`→종합병원, `금고`→새마을금고, `출시`→재출시·첫 출시 같은 역효과가 없는가.
+
+### 14-4. 문법 오류 최종 확인
+
+```bash
+cd /tmp/go_deploy/news_bot && python3 -m py_compile collector.py main.py && echo SYNTAX_OK
 ```
 
 ---
 
-## 15. 신뢰 출처(TRUSTED_DOMAINS) 명단 — 총 107개
+## 15. 배포 후 검증 (생략 = 빵꾸)
+
+```bash
+# 1. Actions 성공 + BOT_RUNNING_OK 확인 (저장소 공개라 PAT 없이도 조회 가능)
+curl -s "https://api.github.com/repos/won3ho-max/go/actions/runs?per_page=1" | python3 -c "
+import json,sys; r=json.load(sys.stdin)['workflow_runs'][0]
+print(r['name'], r['status'], r['conclusion'], r['head_sha'][:7])"
+
+# 2. 서버 상태 (가능하면)
+ssh won3ho@34.50.62.215 "sudo systemctl is-active news_bot && tail -5 ~/bot.log"
+
+# 3. 텔레그램: ADMIN 1:1로 '배포 완료 테스트' 메시지 도착 확인
+```
+
+추가로, 푸시한 커밋이 실제 main에 반영됐는지 확인 (`git log origin/main -1` — 다른 시스템 커밋에 묻혀 rebase 누락되는 사고 방지).
+
+---
+
+## 16. 유지보수 SOP
+
+### A. "이 PR 기사가 채널에 떴다" (오발송)
+
+1. §14-1로 역추적 → 어느 단계에서 새는지 특정
+2. 패치 위치 결정 (위에서부터 순서대로 검토):
+   - 매체 자체가 문제 → BLOCKED_DOMAINS (+ 네이버 유입이면 도메인 필수, §13-5)
+   - Google RSS 소스명만 잡힘 → BLOCKED_SOURCE_NAMES
+   - 제목에 반복되는 구조적 PR 어구 → STRUCTURAL_PROMO_PATTERNS
+   - 단어 하나로 차단 가능 → PROMO_KEYWORDS
+   - 패턴은 못 잡고 LLM이 오판 → LLM 프롬프트 NO 카테고리에 구체 예시 추가
+3. §14-2 + §14-3 + §14-4 통과 후 §3 절차로 배포 → §15 검증
+
+### B. "이 기사가 누락됐다"
+
+1. 먼저 필터 문제인지 확인: §14-1에서 `is_relevant=True`인데 안 왔다면 필터가 아니라 **§13-1(10건 제한) / §13-2(/news 가로채기) / §13-7(유사제목 차단) / §13-9(RSS 딜레이) / 24h 컷오프** 중 하나다. 키워드 패치 불필요.
+2. `is_relevant=False`라면:
+   - 제목에 회사명 없음 → KEYWORDS 추가 검토 (substring 점검)
+   - 클릭베이트형 제목 → CLICKBAIT_PRODUCT_HINTS 추가
+   - KEYWORDS는 맞는데 5단계에서 죽음 → WHITELIST_KEYWORDS 추가
+   - STRUCTURAL/PROMO가 오차단 → 해당 패턴을 더 구체적인 어구로 정밀화 (삭제 시 의존 기사 확인)
+3. 사용자에게 고지: 해당 기사 자체는 24h 컷오프로 재수집 불가, 패치는 향후분부터 적용
+
+### C. 봇이 멈췄다 / 이상 동작
+
+```bash
+ssh won3ho@34.50.62.215
+sudo systemctl status news_bot
+tail -50 ~/bot.log
+# 중복 인스턴스 의심 시: ps aux | grep main.py (락이 있어 정상이면 1개)
+# LLM 오류 다발 시: API 키·크레딧 확인 (§13-4)
+```
+
+---
+
+## 17. TRUSTED_DOMAINS 명단 (107개 — 분류 요약)
 
 | 분류 | 매체 |
 |---|---|
@@ -431,7 +440,17 @@ curl -s -H "Authorization: token <PAT>" "https://api.github.com/repos/won3ho-max
 | 경제 대형 (24) | 매일경제, 한국경제, 서울경제, 머니투데이, 파이낸셜뉴스, 아시아경제, 이데일리, 헤럴드경제, 이투데이, 뉴스핌, 더벨, 비즈니스포스트, 아이뉴스24, 아주뉴스, FN투데이, 한국금융신문, 비즈워치, 머니S, 뉴스토마토, 딜사이트, 인베스트조선, 이코노미스트, 시사저널, 시사인 |
 | 경제 중형 (12) | seoulfn, efnews, joseilbo, taxtimes, insure, aitimes, econovill, forbes, thescoop, newdaily, polinews, newsworks |
 | 종합일간지 (15) | 조선, 중앙, 동아, 한겨레, 경향, 국민, 세계, 문화, 한국, 내일, 쿠키, 프레시안, 오마이, 미디어오늘, 데일리안 |
-| 방송 (15) | YTN, MBC, KBS, SBS, JTBC, TV조선, 채널A, MBN, MTN, 한국경제TV, 서울경제TV, 매일경제TV, 연합뉴스TV, CBS, 노컷, TBS, OBS, 아리랑 |
+| 방송 (18) | YTN, MBC, KBS, SBS, JTBC, TV조선, 채널A, MBN, MTN, 한국경제TV, **서울경제TV(sentv — 차단 금지)**, 매일경제TV, 연합뉴스TV, CBS, 노컷, TBS, OBS, 아리랑 |
 | IT 전문 (11) | 전자신문, ZDNet, 블로터, 디지털데일리, 보안뉴스, 디지털타임스, IT데일리, AI타임스, 벤처스퀘어, 플래텀, 아이로봇뉴스 |
 | 지역 (17) | 부산일보, 국제, 경남, 영남, 매일, 대전, 충청투데이, 광주, 전남, 전북도민, 도민, 강원, 강원도민, 제주, 한라, 인천, 경기, 중도 |
 | 기타 (2) | 더팩트, 뉴스와이어 |
+
+정확한 도메인 목록은 코드 21~66행이 기준.
+
+---
+
+## 18. 이 문서의 유지 규칙
+
+- 패치할 때마다 §12 이력에 한 줄 추가하고, 상수 개수가 바뀌면 §8 표를 갱신할 것
+- 새 함정·사고를 발견하면 §0 금지 목록 또는 §13에 **즉시** 추가할 것 — 이 문서의 존재 이유다
+- 갱신본은 저장소 루트 `HANDOVER.md`로 커밋 (news_bot/ 밖이므로 배포 트리거 안 됨 — 정상)
