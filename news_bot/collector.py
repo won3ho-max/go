@@ -709,6 +709,15 @@ PROMO_KEYWORDS = [
     # 카드사 시니어 상품 시리즈 (2026-06-07 매경 '액티브 시니어 [1분 어드바이스]')
     '[1분 어드바이스]', '[1분어드바이스]', '[1분 투자]',
     '액티브 시니어', '시니어 전용카드', '시니어 전용 카드', '챙기세요',
+    # 케뱅·인터넷뱅크 제휴 통장·체크카드 캐시백 PR (2026-06-15 mt.co.kr 무신사 제휴)
+    '제휴 통장', '제휴통장', '제휴 체크카드', '예약하고', '받으세요',
+    "'5만원 받", '5만원 받으세요', '캐시백 받', '리워드 받',
+    # 내부통제·정보관리 시스템 운영 PR (2026-06-15 BNK 그룹 내부통제 시스템)
+    '내부통제 정보관리', '정보관리 시스템', '관리 시스템 운영',
+    '시스템 운영 시작', '컴플라이언스 시스템',
+    # 사회공헌 AI 반려로봇·독거노인 (2026-06-15 새마을금고 반려로봇 200대)
+    '독거노인', '독거 노인', 'AI 반려로봇', '반려로봇 지원', '반려로봇',
+    '대 지원', '대 무료 제공', '대 기증',
     # 사회공헌 봉사 패턴 (명의·세브란스 등 의료진 농촌 방문)
     '명의들이', '명의가', '농촌으로 왔다', '찾아가는 종합병원', '찾아가는 의료',
     '의료진 방문', '의료 봉사',
@@ -822,8 +831,9 @@ def load_seen_titles() -> list:
 
 
 def save_seen_titles(titles: list):
+    # 2026-06-15: 100→500 확장 (강호동 뇌물 의혹 등 옛 기사 RSS 재발송 차단)
     with open(SEEN_TITLES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(titles[-100:], f, ensure_ascii=False)
+        json.dump(titles[-500:], f, ensure_ascii=False)
 
 
 def get_article_id(url, title):
@@ -845,11 +855,16 @@ def _normalize_title(title: str) -> str:
     return re.sub(r'\s*-\s*[^-]+$', '', title).strip()
 
 
+# 당국명 — 양쪽 제목에 등장 시 dedup 임계값 완화 (2026-06-15 금감원 6건 중복 대응)
+_AGENCY_NAMES = ['금감원', '금융감독원', '금융위', '금융위원회',
+                  '한국은행', '한은', '금통위', '예금보험공사', '예보']
+
+
 def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> bool:
-    """핵심 키워드 3개 이상 겹치면 유사 기사로 판단.
-    부분 문자열도 매칭 — 예: '농협은행장' ↔ 'NH농협은행장'
-    언론사명(' - 언론사') 제거 후 비교.
-    완전히 같은 제목은 즉시 중복 처리.
+    """핵심 키워드 N개 이상 겹치면 유사 기사로 판단.
+    부분 문자열 매칭 — 예: '농협은행장' ↔ 'NH농협은행장'
+    완전 일치는 즉시 차단.
+    당국 보도자료(금감원·금융위 등)는 변형 발표가 많아 2개만 겹쳐도 dedup.
     """
     title_clean = _normalize_title(title)
     # 완전 일치 제목 즉시 차단
@@ -860,6 +875,8 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
     words_new = _extract_key_words(title_clean)
     if len(words_new) < 2:
         return False
+    # 새 제목에 당국명이 포함됐는지 미리 계산 (어떤 별칭이라도)
+    new_has_agency = any(a in title_clean for a in _AGENCY_NAMES)
     for prev in recent_titles:
         prev_clean = _normalize_title(prev)
         words_prev = _extract_key_words(prev_clean)
@@ -871,8 +888,13 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
                     count += 1
                     matched_prev.add(wp)
                     break
-        if count >= min_matches:
-            logger.debug(f"유사 기사 차단: '{title[:30]}' ↔ '{prev[:30]}'")
+        # 양쪽 모두 어떤 당국명이라도 포함하면 임계값 완화 (별칭 달라도 OK)
+        # 예: '한국은행' ↔ '한은' (substring 매치 안 되지만 같은 기관)
+        threshold = min_matches
+        if new_has_agency and any(a in prev_clean for a in _AGENCY_NAMES):
+            threshold = 2
+        if count >= threshold:
+            logger.debug(f"유사 기사 차단(threshold={threshold}): '{title[:30]}' ↔ '{prev[:30]}'")
             return True
     return False
 
