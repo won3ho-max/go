@@ -462,11 +462,14 @@ def render_person_card(d, person, rank, x, y, w, h):
         sb = sf.getbbox("매도")
         d.text((x+10+(24-(sb[2]-sb[0]))//2, iy+3), "매도", font=sf, fill=SOLD_BADGE)
 
-        # 종목명 (작은 폰트)
+        # 종목명 + 매수일→매도일 (작은 폰트)
         name_display = item.get("short", item.get("name", ""))
+        rec_dt = item.get("rec_date", "")
+        rec_short = rec_dt[5:] if rec_dt and len(rec_dt) >= 10 else rec_dt
         sell_dt = item.get("sell_date", "")
         sell_short = sell_dt[5:] if sell_dt and len(sell_dt) >= 10 else sell_dt
-        label = f"{name_display} {sell_short}"
+        date_range = f"{rec_short}→{sell_short}" if rec_short else sell_short
+        label = f"{name_display} {date_range}"
         d.text((x+38, iy+2), label, font=_font(size=9), fill=GREY_TEXT)
 
         # 수익률 (우측)
