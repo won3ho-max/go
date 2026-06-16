@@ -105,11 +105,28 @@ EXEC_NAMES = {
     '강호동', '박서홍', '이찬우', '강태영',
     # 수협 (노동진: 중앙회장, 신학기: Sh수협은행장)
     '노동진', '신학기',
-    # 5대 금융지주 회장 — 동등 처리 (2026-06-16 농협만 EXEC_NAMES 차별 해소)
+    # 8대 금융지주 회장 (2026-06-16 동등 처리 — 농협만 LLM 강제 차별 해소)
     '양종희',  # KB금융
     '진옥동',  # 신한금융
     '함영주',  # 하나금융
     '임종룡',  # 우리금융
+    '빈대인',  # BNK금융
+    '김기홍',  # JB금융
+    '황병우',  # iM금융
+    # 5대 시중은행 행장 (지주 회장과 함께 그룹 차원 의사결정자)
+    '이환주',  # KB국민은행
+    '정상혁',  # 신한은행
+    '이호성',  # 하나은행
+    '정진완',  # 우리은행
+    '김성태',  # IBK기업은행
+    # 인터넷전문은행 대표 (3사 모두)
+    '윤호영',  # 카카오뱅크
+    '최우형',  # 케이뱅크
+    '이은미',  # 토스뱅크
+    # iM뱅크 (지주 회장 황병우는 별도)
+    '강정훈',  # iM뱅크
+    # 카드 — 핵심부터 (전 카드사 추후 확장)
+    '박창훈',  # 신한카드
 }
 
 
@@ -361,7 +378,13 @@ WHITELIST_KEYWORDS = [
     # 주요 경영진 실명 — 이름이 기사 제목에 등장하면 주목 가치 있음
     '강호동', '박서홍', '이찬우', '강태영',     # 농협
     '노동진', '신학기',                         # 수협
-    '양종희', '진옥동', '함영주', '임종룡',     # 5대 금융지주 회장 (KB·신한·하나·우리)
+    # 8대 금융지주 회장 + 산하 시중은행장·인터넷뱅크·카드 사장
+    '양종희', '진옥동', '함영주', '임종룡',     # 5대 지주 (KB·신한·하나·우리)
+    '빈대인', '김기홍', '황병우',               # 지방 3대 지주 (BNK·JB·iM)
+    '이환주', '정상혁', '이호성', '정진완', '김성태',  # 5대 시중은행장
+    '윤호영', '최우형', '이은미',               # 인터넷뱅크 3사
+    '강정훈',                                    # iM뱅크
+    '박창훈',                                    # 신한카드
     # 수협 핵심 사업 영역 (어업 정책·수산금융)
     '수산정책', '수산자금', '수산금융', '어업인 대출', '어선원',
     # 감사 — 단독 사용 시 '감사의 마음' 등 오탐. 구체적인 표현만 허용
@@ -809,11 +832,22 @@ RSS_FEEDS = [
     "https://news.google.com/rss/search?q=신한금융지주&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=하나금융지주&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=우리금융지주&hl=ko&gl=KR&ceid=KR:ko",
-    # Google 뉴스 — 5대 금융지주 회장 실명 (2026-06-16 EXEC_NAMES 동등화)
+    # Google 뉴스 — 8대 금융지주 회장 실명 (2026-06-16 농협 EXEC_NAMES 차별 해소)
     "https://news.google.com/rss/search?q=양종희+KB금융&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=진옥동+신한금융&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=함영주+하나금융&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=임종룡+우리금융&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=빈대인+BNK금융&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=김기홍+JB금융&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=황병우+iM금융&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 5대 시중은행장 + 인터넷뱅크 대표
+    "https://news.google.com/rss/search?q=이환주+KB국민은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정상혁+신한은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=이호성+하나은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정진완+우리은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=윤호영+카카오뱅크&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=최우형+케이뱅크&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=이은미+토스뱅크&hl=ko&gl=KR&ceid=KR:ko",
     # Google 뉴스 — 단독 취재 우선 수집 (2026-06-16 타사 단독 누락 대응)
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+은행&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+금융&hl=ko&gl=KR&ceid=KR:ko",
