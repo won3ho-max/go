@@ -125,8 +125,36 @@ EXEC_NAMES = {
     '이은미',  # 토스뱅크
     # iM뱅크 (지주 회장 황병우는 별도)
     '강정훈',  # iM뱅크
-    # 카드 — 핵심부터 (전 카드사 추후 확장)
+    # 지방은행 행장 (5)
+    '방성빈',  # BNK부산은행
+    '예경탁',  # BNK경남은행
+    '정일선',  # JB광주은행 (제15대)
+    '고병일',  # JB광주은행 (전임 — 인사 과도기 대비 legacy 유지)
+    '박춘원',  # JB전북은행 (제14대 내정)
+    '백종일',  # JB전북은행 (전임 — 인사 과도기 대비 legacy 유지)
+    '이희수',  # 제주은행
+    # 카드 7사 (2026-06-16 EXEC_NAMES 전수)
     '박창훈',  # 신한카드
+    '김재관',  # KB국민카드
+    '김이태',  # 삼성카드
+    '정태영',  # 현대카드
+    '정상호',  # 롯데카드
+    '진성원',  # 우리카드
+    '성영수',  # 하나카드
+    '김영우',  # BC카드
+    # 생명보험 5사
+    '홍원학',  # 삼성생명
+    '여승주',  # 한화생명
+    '신창재',  # 교보생명
+    '천상영',  # 신한라이프
+    '정문철',  # KB라이프
+    # 손해보험 5사
+    '이문화',  # 삼성화재
+    '정종표',  # DB손해보험
+    '이석현',  # 현대해상
+    '구본욱',  # KB손해보험
+    '김중현',  # 메리츠화재
+    '김용범',  # 메리츠금융지주 부회장
 }
 
 
@@ -384,7 +412,14 @@ WHITELIST_KEYWORDS = [
     '이환주', '정상혁', '이호성', '정진완', '김성태',  # 5대 시중은행장
     '윤호영', '최우형', '이은미',               # 인터넷뱅크 3사
     '강정훈',                                    # iM뱅크
-    '박창훈',                                    # 신한카드
+    # 지방은행 행장 (5)
+    '방성빈', '예경탁', '정일선', '고병일', '박춘원', '백종일', '이희수',
+    # 카드 7사 사장
+    '박창훈', '김재관', '김이태', '정태영', '정상호', '진성원', '성영수', '김영우',
+    # 생명보험 5사 대표
+    '홍원학', '여승주', '신창재', '천상영', '정문철',
+    # 손해보험 5사 + 메리츠금융지주
+    '이문화', '정종표', '이석현', '구본욱', '김중현', '김용범'
     # 수협 핵심 사업 영역 (어업 정책·수산금융)
     '수산정책', '수산자금', '수산금융', '어업인 대출', '어선원',
     # 감사 — 단독 사용 시 '감사의 마음' 등 오탐. 구체적인 표현만 허용
@@ -848,6 +883,33 @@ RSS_FEEDS = [
     "https://news.google.com/rss/search?q=윤호영+카카오뱅크&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=최우형+케이뱅크&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=이은미+토스뱅크&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 지방은행 행장 실명
+    "https://news.google.com/rss/search?q=방성빈+부산은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=예경탁+경남은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정일선+광주은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=박춘원+전북은행&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=이희수+제주은행&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 카드 7사 사장 + 신한카드 박창훈
+    "https://news.google.com/rss/search?q=박창훈+신한카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=김재관+KB국민카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=김이태+삼성카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정태영+현대카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정상호+롯데카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=진성원+우리카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=성영수+하나카드&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=김영우+BC카드&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 생명보험 5사 대표
+    "https://news.google.com/rss/search?q=홍원학+삼성생명&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=여승주+한화생명&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=신창재+교보생명&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=천상영+신한라이프&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정문철+KB라이프&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 손해보험 5사
+    "https://news.google.com/rss/search?q=이문화+삼성화재&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=정종표+DB손해보험&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=이석현+현대해상&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=구본욱+KB손해보험&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=김중현+메리츠화재&hl=ko&gl=KR&ceid=KR:ko",
     # Google 뉴스 — 단독 취재 우선 수집 (2026-06-16 타사 단독 누락 대응)
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+은행&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+금융&hl=ko&gl=KR&ceid=KR:ko",
