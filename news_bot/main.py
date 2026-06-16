@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import fcntl
+import asyncio
 from datetime import time, datetime
 from zoneinfo import ZoneInfo
 from telegram import Update
@@ -94,7 +95,9 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not articles:
         await update.message.reply_text("새로운 뉴스가 없습니다.")
         return
-    for article in articles[:5]:
+    for i, article in enumerate(articles[:30]):
+        if i > 0:
+            await asyncio.sleep(1)
         await update.message.reply_text(
             format_article(article),
             parse_mode='HTML',
@@ -151,7 +154,10 @@ async def scheduled_check(context):
             pending.extend(articles)
             save_pending(pending)
             return
-        for article in articles[:10]:
+        # 회당 최대 30건 발송 + 1초 sleep (텔레그램 rate-limit·도배 방지)
+        for i, article in enumerate(articles[:30]):
+            if i > 0:
+                await asyncio.sleep(1)
             try:
                 await context.bot.send_message(
                     chat_id=BROADCAST_CHAT_ID,
