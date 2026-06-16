@@ -163,13 +163,14 @@ def _fetch_naver_index(code: str, name: str, tag: str) -> dict | None:
         return None
 
 def _fetch_yahoo_index(symbol: str, name: str, tag: str) -> dict | None:
-    """Yahoo Finance로 미국 지수/환율 조회"""
+    """Yahoo Finance로 해외 지수/환율 조회 (NaN 자동 제거)"""
     try:
         t = yf.Ticker(symbol)
         hist = t.history(period="5d", prepost=False)
-        if len(hist) >= 2:
-            cur  = float(hist["Close"].iloc[-1])
-            prev = float(hist["Close"].iloc[-2])
+        closes = hist["Close"].dropna()
+        if len(closes) >= 2:
+            cur  = float(closes.iloc[-1])
+            prev = float(closes.iloc[-2])
             chg  = (cur - prev) / prev
             return {"name": name, "tag": tag, "price": cur, "change": chg}
     except Exception as e:
@@ -177,15 +178,23 @@ def _fetch_yahoo_index(symbol: str, name: str, tag: str) -> dict | None:
     return None
 
 def fetch_market_data() -> list:
-    """KOSPI/KOSDAQ(네이버), S&P500/NASDAQ/USD-KRW(Yahoo) 조회"""
+    """KOSPI/KOSDAQ(네이버) + 미국/일본/중국/홍콩/환율(Yahoo) 조회"""
     results = []
     # 한국 지수: 네이버 (정확도 높음)
     for code, name, tag in [("KOSPI", "KOSPI", "전일"), ("KOSDAQ", "KOSDAQ", "전일")]:
         r = _fetch_naver_index(code, name, tag)
         if r:
             results.append(r)
-    # 미국 지수 + 환율: Yahoo Finance
-    for sym, name, tag in [("^GSPC", "S&P 500", ""), ("^IXIC", "NASDAQ", ""), ("KRW=X", "USD/KRW", "")]:
+    # 해외 지수 + 환율: Yahoo Finance
+    yahoo_indices = [
+        ("^GSPC",    "S&P 500",  ""),
+        ("^IXIC",    "NASDAQ",   ""),
+        ("^N225",    "닛케이225", ""),
+        ("^HSI",     "항셍",     ""),
+        ("000001.SS","상해종합",  ""),
+        ("KRW=X",    "USD/KRW",  ""),
+    ]
+    for sym, name, tag in yahoo_indices:
         r = _fetch_yahoo_index(sym, name, tag)
         if r:
             results.append(r)
@@ -488,8 +497,8 @@ def render_market_panel(d, market_data, x0, y0, w, h):
         d.text((x0+16, y0+58), "데이터 조회 실패", font=_font(size=12), fill=GREY_TEXT)
         return
 
-    ROW_H = 38
-    sy = y0 + 56
+    ROW_H = 34
+    sy = y0 + 50
     for i, m in enumerate(market_data):
         ry = sy + i * ROW_H
         if ry + ROW_H > y0 + h - 4:
