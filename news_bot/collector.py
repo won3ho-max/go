@@ -344,6 +344,14 @@ KEYWORDS = [
     # ── 정부·정책 프로그램명 (2026-05-23 클릭베이트 누락 대응) ──
     '국민성장펀드', '국민참여성장펀드', '생산적 금융', '포용금융',
     'NH 상생성장 프로젝트',
+    # 정책·규제 토픽 (2026-06-16 6/14 누락 사례 — 조비 서민안정기금 등)
+    '서민안정기금', '서민금융', '서민금융지원',
+    'DSR', '망분리', 'LTV', 'DTI',
+    '전세대출 규제', '주담대 규제', '가계대출 규제',
+    '대출 규제', '대출 한도',
+    '금융 당국',  # '금융당국'도 동일 처리
+    '금융당국',
+    '대통령 공약',  # 정책 발표성 기사 (정치보다 정책 측면)
     # ── 정통 금융 칼럼·시리즈 태그 (2026-05-25 MTN 사례 — 교육성 금융 콘텐츠) ──
     '[금융 히스토리]', '[금융 인사이트]', '[금융 풍속도]', '[금융 IN]',
     '[금융 NOW]', '[CEO 라운지]',
@@ -401,6 +409,9 @@ WHITELIST_KEYWORDS = [
     # 비즈니스 영향 분석 어구 (2026-05-26 서울신문 '스벅 제휴 카드사 셈법' 사례)
     # — 농촌·PR 기사에 거의 안 나오고 비즈니스 분석 기사에 자주 등장
     '역풍', '셈법', '딜레마', '난감',
+    # 정책·규제 긴급성·압박 어구 (2026-06-16 6/14 DSR·서민안정기금 누락 사례)
+    '족쇄', '데드라인', '유예', '발등에 불',
+    '유예 종료', '규제 완화', '규제 강화', '규제 시행',
     # 농협 개혁 핵심 이슈
     '직선제', '철회', '번복', '오락가락',
     # 주요 경영진 실명 — 이름이 기사 제목에 등장하면 주목 가치 있음
@@ -928,6 +939,12 @@ RSS_FEEDS = [
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+금융&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+보험&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=%22%5B단독%5D%22+카드&hl=ko&gl=KR&ceid=KR:ko",
+    # Google 뉴스 — 정책·규제 토픽 (2026-06-16 6/14 망분리·DSR·전세대출 누락 대응)
+    "https://news.google.com/rss/search?q=DSR+규제&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=망분리+규제&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=가계대출+규제&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=전세대출+규제&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=서민금융+정책&hl=ko&gl=KR&ceid=KR:ko",
     # Google 뉴스 — 인터넷전문은행 (자체 RSS 없음)
     "https://news.google.com/rss/search?q=카카오뱅크&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=토스뱅크&hl=ko&gl=KR&ceid=KR:ko",
