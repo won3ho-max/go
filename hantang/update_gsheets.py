@@ -15,7 +15,7 @@ GitHub Actions에서 로컬 컴퓨터 없이 실행 가능
   GSHEETS_ID           - 스프레드시트 ID
 """
 
-import os, sys, re, json, datetime, subprocess
+import os, sys, re, json, datetime, subprocess, math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def _ensure(pkg, import_name=None):
@@ -117,6 +117,10 @@ def fetch_price(market: str, code: str, date: datetime.date | None = None) -> fl
                 price = float(hist["Close"].iloc[-1])
             else:
                 return None
+
+        # NaN/Inf 방어
+        if math.isnan(price) or math.isinf(price):
+            return None
 
         result = int(price) if market == "KR" else round(price, 2)
         _yf_cache[cache_key] = result
