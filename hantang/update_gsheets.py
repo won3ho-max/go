@@ -754,6 +754,74 @@ def fix_realized_sell_dates(ws: gspread.Worksheet, today: datetime.date):
     return fixed
 
 
+# ── 실현 종목 매도가 검증 ──────────────────────────────────────────────────
+def verify_realized_prices(ws: gspread.Worksheet, today: datetime.date):
+    """
+    실현(매도) 종목의 매도가(T열)가 매도일(R열) 종가와 일치하는지 검증.
+    5% 이상 차이나면 Yahoo 종가로 수정한다.
+    """
+    all_values = ws.get_all_values()
+    blocks = find_person_blocks(all_values)
+    updates = []
+    fixed = []
+
+    for block in blocks:
+        person = block["person"]
+        for row_1 in range(block["row_start"], block["row_end"] + 1):
+            idx = row_1 - 1
+            if idx >= len(all_values):
+                continue
+            row = all_values[idx]
+
+            p_name    = row[15] if len(row) > 15 else ""  # P: 종목명
+            p_sell_dt = row[17] if len(row) > 17 else ""  # R: 매도일
+            p_base    = row[18] if len(row) > 18 else ""  # S: 기준가
+            p_sell_pr = row[19] if len(row) > 19 else ""  # T: 매도가
+
+            if not p_name or not p_sell_dt or not p_sell_pr:
+                continue
+
+            try:
+                sell_date = datetime.date.fromisoformat(str(p_sell_dt).strip()[:10])
+            except (ValueError, TypeError):
+                continue
+
+            if sell_date >= today:
+                continue  # 아직 종가 미확정
+
+            market, code = parse_stock(str(p_name).strip())
+            if not market or not code:
+                continue
+
+            try:
+                recorded = float(str(p_sell_pr).replace(",", ""))
+            except (ValueError, TypeError):
+                continue
+
+            # Yahoo에서 해당 날짜 종가 조회
+            correct = fetch_price(market, code, sell_date)
+            if correct is None:
+                continue
+
+            # 5% 이상 차이나면 수정
+            diff = abs(correct - recorded) / max(recorded, 1)
+            if diff < 0.05:
+                continue
+
+            updates.append({"range": f"T{row_1}", "values": [[correct]]})
+            updates.append({"range": f"U{row_1}", "values": [[f"=(T{row_1}-S{row_1})/S{row_1}"]]})
+            fixed.append(f"{person}/{p_name}: {recorded:,.0f} → {correct:,} ({sell_date})")
+            print(f"    [매도가 수정] {person}/{p_name}: {recorded:,.0f} → {correct:,} ({sell_date})")
+
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        print(f"  매도가 검증 수정 완료: {len(fixed)}건")
+    else:
+        print(f"  매도가 검증: 이상 없음")
+
+    return fixed
+
+
 # ── 메인 ────────────────────────────────────────────────────────────────
 def today_kst():
     """KST(UTC+9) 기준 오늘 날짜"""
@@ -771,17 +839,6 @@ def main():
     print(f"[시트] {ws.title}")
 
     all_values = ws.get_all_values()
-
-    # 0. 일회성 날짜 보정: K열 2026-05-25 → 2026-05-26
-    _fix_updates = []
-    for i, row in enumerate(all_values):
-        k_val = row[10] if len(row) > 10 else ""
-        if str(k_val).strip() == "2026-05-25":
-            _fix_updates.append({"range": f"K{i+1}", "values": [["2026-05-26"]]})
-    if _fix_updates:
-        ws.batch_update(_fix_updates, value_input_option="USER_ENTERED")
-        print(f"  [날짜보정] K열 2026-05-25 → 2026-05-26: {len(_fix_updates)}건")
-        all_values = ws.get_all_values()
 
     # 1. 대기 종목 추가
     added = process_pending(ws, all_values, today)
@@ -803,6 +860,11 @@ def main():
     fixed = fix_realized_sell_dates(ws, today)
     if fixed:
         for f in fixed: print(f"  · {f}")
+
+    # 3-1. 실현 종목 매도가 검증 (Yahoo 종가와 5% 이상 차이 시 수정)
+    price_fixed = verify_realized_prices(ws, today)
+    if price_fixed:
+        for pf in price_fixed: print(f"  · {pf}")
 
     # 4. portfolio.json 내보내기
     all_values = ws.get_all_values()
