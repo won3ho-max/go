@@ -1163,7 +1163,9 @@ def is_relevant(title, summary=''):
     has_scoop_tag = '[단독]' in title or '[단독보도]' in title
     is_scoop_fallback = (not title_has_kw) and has_scoop_tag and summary_has_kw
 
-    if not title_has_kw and not is_clickbait_fallback and not is_scoop_fallback:
+    # v6.6: [단독] 태그는 제목 키워드 없어도 1단계 통과 (재무 피드에서 수집됨).
+    #        STRUCTURAL/PROMO/네거티브 레이어로 PR·재해·비금융은 계속 차단.
+    if not title_has_kw and not is_clickbait_fallback and not is_scoop_fallback and not has_scoop_tag:
         return False
     # 2단계: 구조적 홍보성 패턴 즉시 차단
     if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
@@ -1173,15 +1175,15 @@ def is_relevant(title, summary=''):
         return False
     # 4단계: [단독] 취재 기사 즉시 통과 (속보는 내용 없는 경우 多 → 제외)
     # [속보]는 WHITELIST를 통과해야 — 진짜 속보(행장 사퇴/금리 인상 등)는 WHITELIST 매치됨
-    SCOOP_TAGS = ['[단독]', '[단독보도]']
-    if any(tag in title for tag in SCOOP_TAGS):
-        return True
-    # 4.5단계: 1차산업·재해 토픽 차단 (v6) — 금융 실체 단어 없으면 차단.
-    # 농협·수협 이중정체성으로 인한 폭염·양식·재해 PR이 WHITELIST 범용어(전망 등)·
-    # 인물명으로 통과되던 구멍 차단. 신뢰/비신뢰 출처 모두 is_relevant 단계에서 적용됨.
+    # 3.5단계: 1차산업·재해 토픽 차단 (v6, v6.6 순서이동) — [단독]보다 먼저 적용.
+    # 농협·수협 이중정체성 폭염·양식·재해 PR이 WHITELIST·인물명·[단독]으로 통과되던 구멍 차단.
     if any(t in title for t in PRIMARY_INDUSTRY_TOPICS) and \
        not any(t in title for t in FINANCIAL_SUBSTANCE_TERMS):
         return False
+    # 4단계: [단독] 취재 기사 즉시 통과 (속보는 내용 없는 경우 多 → 제외)
+    SCOOP_TAGS = ['[단독]', '[단독보도]']
+    if any(tag in title for tag in SCOOP_TAGS):
+        return True
     # 5단계: 화이트리스트 — 제목에 영양가 있는 키워드가 있어야 통과
     if any(kw in title for kw in WHITELIST_KEYWORDS):
         return True
