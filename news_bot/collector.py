@@ -1188,14 +1188,13 @@ def is_relevant(title, summary=''):
     # 3단계: 블랙리스트 차단
     if any(kw in title for kw in PROMO_KEYWORDS):
         return False
-    # 4단계: [단독] 취재 기사 즉시 통과 (속보는 내용 없는 경우 多 → 제외)
-    # [속보]는 WHITELIST를 통과해야 — 진짜 속보(행장 사퇴/금리 인상 등)는 WHITELIST 매치됨
     # 3.5단계: 1차산업·재해 토픽 차단 (v6, v6.6 순서이동) — [단독]보다 먼저 적용.
     # 농협·수협 이중정체성 폭염·양식·재해 PR이 WHITELIST·인물명·[단독]으로 통과되던 구멍 차단.
     if any(t in title for t in PRIMARY_INDUSTRY_TOPICS) and \
        not any(t in title for t in FINANCIAL_SUBSTANCE_TERMS):
         return False
     # 4단계: [단독] 취재 기사 즉시 통과 (속보는 내용 없는 경우 多 → 제외)
+    # [속보]는 WHITELIST를 통과해야 — 진짜 속보(행장 사퇴/금리 인상 등)는 WHITELIST 매치됨
     SCOOP_TAGS = ['[단독]', '[단독보도]']
     if any(tag in title for tag in SCOOP_TAGS):
         return True
