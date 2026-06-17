@@ -360,6 +360,8 @@ KEYWORDS = [
     '인뱅', '케뱅', '카뱅', '토뱅',
     # 정책서민금융 (v6.5) — '[단독] 햇살론 특례보증 부실' 누락 대응
     '햇살론', '취약차주', '특례보증', '정책서민금융', '최저신용자',
+    # 거시·계열 보강 (v6.8)
+    '가계부채', '메리츠',
     # 해외 중앙은행 (v6.4) — 사용자 지시로 포함 (BOJ/Fed/ECB 등)
     '연준', '연방준비제도', 'FOMC', '유럽중앙은행', 'ECB',
     '일본은행', '중국인민은행', '인민은행', '영란은행',
@@ -386,6 +388,8 @@ WHITELIST_KEYWORDS = [
     # 통화정책·인사·규제 (v6.4) — 한은 총재 인사/물가·인플레/대출 조이기 등
     '총재', '인플레', '소비자물가', '조이기', '주목할 종목',
     '지준율', '지급준비율', '통화정책', '정책금리',
+    # 정책 프로그램·거시 (v6.8) — 포용금융/국민성장펀드/물가/가계부채
+    '포용금융', '국민성장펀드', '물가', '고물가', '가계부채',
     # 금융·경영 실적 및 분석
     '금리', '실적', '순이익', '영업이익', '당기순이익', '자산', '부실', '부실대출',
     '여신', '수신', '대출', '예금', '연체', '적자', '흑자', '매출', '수익성',
@@ -693,7 +697,7 @@ STRUCTURAL_PROMO_PATTERNS = [
 PROMO_KEYWORDS = [
     # 신상품·서비스 출시
     '출시', '론칭', '새로 선보', '새롭게 선보', '신상품', '신규 출시',
-    '신설', '출시·신설', '특약 신설', '신규 도입',
+    '지점 신설', '센터 신설', '영업점 신설', '점포 신설', '출시·신설', '특약 신설', '신규 도입',
     # 지수연동·구조화 상품 홍보 (ELD, ELS 등)
     '지수연동예금', 'ELD', 'ELS', '원금 지키며', '원금보장',
     # 마케팅·이벤트
@@ -1168,9 +1172,9 @@ def is_relevant(title, summary=''):
     has_scoop_tag = '[단독]' in title or '[단독보도]' in title
     is_scoop_fallback = (not title_has_kw) and has_scoop_tag and summary_has_kw
 
-    # v6.6: [단독] 태그는 제목 키워드 없어도 1단계 통과 (재무 피드에서 수집됨).
-    #        STRUCTURAL/PROMO/네거티브 레이어로 PR·재해·비금융은 계속 차단.
-    if not title_has_kw and not is_clickbait_fallback and not is_scoop_fallback and not has_scoop_tag:
+    # v6.8: 1단계 통과 조건 = 제목 KEYWORDS / 클릭베이트·단독 본문fallback / 경영진 실명.
+    #        ([단독] 단독 순수우회는 v6.6→철회: 연예 등 비금융 단독 유입 차단)
+    if not title_has_kw and not is_clickbait_fallback and not is_scoop_fallback and not _has_exec_name(title):
         return False
     # 2단계: 구조적 홍보성 패턴 즉시 차단
     if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
@@ -1188,6 +1192,10 @@ def is_relevant(title, summary=''):
     # 4단계: [단독] 취재 기사 즉시 통과 (속보는 내용 없는 경우 多 → 제외)
     SCOOP_TAGS = ['[단독]', '[단독보도]']
     if any(tag in title for tag in SCOOP_TAGS):
+        return True
+    # 4.6단계: 경영진 실명 기사 통과 (v6.8) — PR은 위 STRUCTURAL/PROMO/네거티브서 이미 차단,
+    #          순수 동정·릴레이는 STRUCTURAL이 잡음. 통과분은 LLM(EXEC 강제)이 최종 판단.
+    if _has_exec_name(title):
         return True
     # 5단계: 화이트리스트 — 제목에 영양가 있는 키워드가 있어야 통과
     if any(kw in title for kw in WHITELIST_KEYWORDS):
