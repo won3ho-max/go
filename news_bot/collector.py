@@ -482,6 +482,10 @@ WHITELIST_KEYWORDS = [
 # 구조적 홍보성 패턴 — 제목 시작 또는 특정 형태로 판별
 # (개별 단어가 아닌 "문장 패턴"으로 탐지)
 STRUCTURAL_PROMO_PATTERNS = [
+    # IT/AI 전환·내부 시상·증권 서비스 PR (v6.11)
+    '인공지능 전환', 'AI 전환',                # 금융 AI 전환 가이드라인 PR
+    '상 신설', 'Zero상', '제로상',             # 사내 시상 신설 PR (신한카드 금융사고 Zero상)
+    '특화 서비스',                             # 증권사 특화서비스 PR (신한투자증권 신탁)
     # 상품출시·IT/AI솔루션·캠페인동정 PR (v6.7)
     '상품 발행', '특판', '하루만 예금',          # 수신상품 출시 PR (광주은행 '하루만 예금')
     '자동화 시동', '내부통제 자동화',            # 내부통제·IT 시스템 도입 PR (SBI저축은행)
@@ -1177,10 +1181,10 @@ def is_relevant(title, summary=''):
     has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
     summary_has_kw = any(kw in summary for kw in KEYWORDS)
     is_clickbait_fallback = (not title_has_kw) and (has_standalone_gumgo or has_product_hint) and summary_has_kw
-    # 추가 fallback: [단독] 단독 취재는 본문 KEYWORDS 매치 시 step 1 우회
-    # (영양가 있는 취재로 가정하되, 본문 검증으로 금융 무관 기사 방지)
+    # v6.11: [단독] 요약-fallback 철회 — 비금융 단독(한컴·케이블카 등)이 본문 금융단어로
+    #         새던 구멍 차단. 금융 단독은 제목에 금융 키워드가 있어 정상 통과됨.
     has_scoop_tag = '[단독]' in title or '[단독보도]' in title
-    is_scoop_fallback = (not title_has_kw) and has_scoop_tag and summary_has_kw
+    is_scoop_fallback = False
 
     # v6.8: 1단계 통과 조건 = 제목 KEYWORDS / 클릭베이트·단독 본문fallback / 경영진 실명.
     #        ([단독] 단독 순수우회는 v6.6→철회: 연예 등 비금융 단독 유입 차단)
