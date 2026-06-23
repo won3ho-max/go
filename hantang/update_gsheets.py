@@ -885,35 +885,6 @@ def main():
             all_values = ws.get_all_values()
         break
 
-    # ── 일회성: 이광훈 티엘비 시트 데이터 조회 (확인 후 제거) ──
-    blocks = find_person_blocks(all_values)
-    for b in blocks:
-        if "이광훈" not in b["person"]:
-            continue
-        print(f"\n{'='*60}")
-        print(f"  [조회] {b['person']} 블록 (행 {b['row_start']}~{b['row_end']})")
-        print(f"{'='*60}")
-        for r in range(b["row_start"], b["row_end"] + 1):
-            ri = r - 1
-            if ri >= len(all_values): break
-            row = all_values[ri]
-            j = row[9] if len(row) > 9 else ""    # J: 활성 종목명
-            k = row[10] if len(row) > 10 else ""   # K: 추천일
-            l = row[11] if len(row) > 11 else ""   # L: 매도예정일
-            m = row[12] if len(row) > 12 else ""   # M: 현재가
-            n = row[13] if len(row) > 13 else ""   # N: 매수가(기준가)
-            o = row[14] if len(row) > 14 else ""   # O: 수익률
-            p = row[15] if len(row) > 15 else ""   # P: 실현 종목명
-            q = row[16] if len(row) > 16 else ""   # Q: 실현 추천일
-            r_col = row[17] if len(row) > 17 else ""   # R: 매도일
-            s = row[18] if len(row) > 18 else ""   # S: 매수가(실현)
-            t = row[19] if len(row) > 19 else ""   # T: 매도가
-            u = row[20] if len(row) > 20 else ""   # U: 수익률(실현)
-            if j or p:
-                print(f"  행{r}: 활성[J={j} K={k} L={l} M={m} N={n} O={o}] | 실현[P={p} Q={q} R={r_col} S={s} T={t} U={u}]")
-        print(f"{'='*60}\n")
-        break
-
     # 1. 대기 종목 추가
     added = process_pending(ws, all_values, today)
 
