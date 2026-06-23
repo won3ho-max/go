@@ -844,6 +844,47 @@ def main():
 
     all_values = ws.get_all_values()
 
+    # 0. 일회성: 김태완 6/22 미추천 패널티 (-10%)
+    _penalty_done = False
+    blocks = find_person_blocks(all_values)
+    for b in blocks:
+        if "김태완" not in b["person"]:
+            continue
+        # 이미 미추천 기록이 있는지 확인
+        already = False
+        for r in range(b["row_start"], b["row_end"] + 1):
+            ri = r - 1
+            if ri >= len(all_values): break
+            p_val = all_values[ri][15] if len(all_values[ri]) > 15 else ""
+            q_val = all_values[ri][16] if len(all_values[ri]) > 16 else ""
+            if "미추천" in str(p_val) and "2026-06-22" in str(q_val):
+                already = True
+                break
+        if already:
+            print("  [패널티] 김태완 6/22 미추천 이미 기록됨")
+            break
+        # P열 빈 행 찾기
+        p_row = None
+        for r in range(b["row_start"], b["row_end"] + 1):
+            ri = r - 1
+            if ri >= len(all_values): break
+            p_val = all_values[ri][15] if len(all_values[ri]) > 15 else ""
+            if not p_val or not str(p_val).strip():
+                p_row = r
+                break
+        if p_row:
+            ws.batch_update([
+                {"range": f"P{p_row}", "values": [["미추천(패널티)"]]},
+                {"range": f"Q{p_row}", "values": [["2026-06-22"]]},
+                {"range": f"R{p_row}", "values": [["2026-06-22"]]},
+                {"range": f"S{p_row}", "values": [[100]]},
+                {"range": f"T{p_row}", "values": [[90]]},
+                {"range": f"U{p_row}", "values": [[f"=(T{p_row}-S{p_row})/S{p_row}"]]},
+            ], value_input_option="USER_ENTERED")
+            print(f"  [패널티] 김태완 미추천 -10% → P열 행 {p_row}")
+            all_values = ws.get_all_values()
+        break
+
     # 1. 대기 종목 추가
     added = process_pending(ws, all_values, today)
 
