@@ -844,45 +844,45 @@ def main():
 
     all_values = ws.get_all_values()
 
-    # 0. 일회성: 김태완 6/22 미추천 패널티 (-10%)
-    _penalty_done = False
+    # 0. 일회성: 이광훈 티엘비 유상증자 매수가 조정 (확인 후 제거)
     blocks = find_person_blocks(all_values)
     for b in blocks:
-        if "김태완" not in b["person"]:
+        if "이광훈" not in b["person"]:
             continue
-        # 이미 미추천 기록이 있는지 확인
-        already = False
+        updates = []
         for r in range(b["row_start"], b["row_end"] + 1):
             ri = r - 1
             if ri >= len(all_values): break
-            p_val = all_values[ri][15] if len(all_values[ri]) > 15 else ""
-            q_val = all_values[ri][16] if len(all_values[ri]) > 16 else ""
-            if "미추천" in str(p_val) and "2026-06-22" in str(q_val):
-                already = True
-                break
-        if already:
-            print("  [패널티] 김태완 6/22 미추천 이미 기록됨")
-            break
-        # P열 빈 행 찾기
-        p_row = None
-        for r in range(b["row_start"], b["row_end"] + 1):
-            ri = r - 1
-            if ri >= len(all_values): break
-            p_val = all_values[ri][15] if len(all_values[ri]) > 15 else ""
-            if not p_val or not str(p_val).strip():
-                p_row = r
-                break
-        if p_row:
-            ws.batch_update([
-                {"range": f"P{p_row}", "values": [["미추천(패널티)"]]},
-                {"range": f"Q{p_row}", "values": [["2026-06-22"]]},
-                {"range": f"R{p_row}", "values": [["2026-06-22"]]},
-                {"range": f"S{p_row}", "values": [[100]]},
-                {"range": f"T{p_row}", "values": [[90]]},
-                {"range": f"U{p_row}", "values": [[f"=(T{p_row}-S{p_row})/S{p_row}"]]},
-            ], value_input_option="USER_ENTERED")
-            print(f"  [패널티] 김태완 미추천 -10% → P열 행 {p_row}")
+            row = all_values[ri]
+            # 활성 종목: J(9)=종목명, K(10)=추천일, L(11)=매수가캐시
+            j_name = row[9] if len(row) > 9 else ""
+            j_rec  = row[10] if len(row) > 10 else ""
+            j_base = row[11] if len(row) > 11 else ""
+            if "티엘비" in j_name and j_rec == "2026-05-26" and j_base:
+                try:
+                    cur = float(str(j_base).replace(",", ""))
+                    if abs(cur - 124998) < 100:  # 아직 미조정
+                        updates.append({"range": f"L{r}", "values": [[118800]]})
+                        print(f"  [유상조정] 행{r} 활성 5/26 매수가 {cur} → 118800")
+                except: pass
+            # 실현 종목: P(15)=종목명, Q(16)=추천일, S(18)=매수가
+            p_name = row[15] if len(row) > 15 else ""
+            p_rec  = row[16] if len(row) > 16 else ""
+            p_base = row[18] if len(row) > 18 else ""
+            if "티엘비" in p_name and p_rec == "2026-05-11" and p_base:
+                try:
+                    cur = float(str(p_base).replace(",", ""))
+                    if abs(cur - 100400) < 100:  # 아직 미조정
+                        updates.append({"range": f"S{r}", "values": [[98485]]})
+                        updates.append({"range": f"U{r}", "values": [[f"=(T{r}-S{r})/S{r}"]]})
+                        print(f"  [유상조정] 행{r} 실현 5/11 매수가 {cur} → 98485")
+                except: pass
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
             all_values = ws.get_all_values()
+            print(f"  [유상조정] 이광훈 티엘비 {len(updates)}건 반영 완료")
+        else:
+            print("  [유상조정] 이광훈 티엘비 이미 조정됨 또는 대상 없음")
         break
 
     # 1. 대기 종목 추가
