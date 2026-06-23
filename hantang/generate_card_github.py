@@ -465,11 +465,20 @@ def render_person_card(d, person, rank, x, y, w, h):
         if iy + sold_h > y + h - 2:
             break
         mkt = item.get("market", "KR")
-        # 매도 뱃지 (작게)
-        draw_rounded_rect(d, x+10, iy+3, x+34, iy+15, (255, 237, 219), radius=2)
+        # 매도/기타 뱃지 (작게)
+        stock_name_raw = item.get("name", "")
+        if "미추천" in stock_name_raw or "패널티" in stock_name_raw:
+            badge_label = "기타"
+            badge_bg = (219, 229, 255)       # 연한 파랑
+            badge_fg = (70, 100, 180)        # 진한 파랑
+        else:
+            badge_label = "매도"
+            badge_bg = (255, 237, 219)       # 기존 연한 주황
+            badge_fg = SOLD_BADGE
+        draw_rounded_rect(d, x+10, iy+3, x+34, iy+15, badge_bg, radius=2)
         sf = _font(bold=True, size=8)
-        sb = sf.getbbox("매도")
-        d.text((x+10+(24-(sb[2]-sb[0]))//2, iy+3), "매도", font=sf, fill=SOLD_BADGE)
+        sb = sf.getbbox(badge_label)
+        d.text((x+10+(24-(sb[2]-sb[0]))//2, iy+3), badge_label, font=sf, fill=badge_fg)
 
         # 종목명 + 매수일→매도일 (작은 폰트)
         name_display = item.get("short", item.get("name", ""))
