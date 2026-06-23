@@ -844,38 +844,6 @@ def main():
 
     all_values = ws.get_all_values()
 
-    # 0. 일회성: 이광훈 티엘비 유상조정 롤백 (이중 조정 수정, 확인 후 제거)
-    # Yahoo가 이미 수정주가로 유상증자를 반영 → 우리가 추가 조정하면 이중 조정
-    # 5/26 활성: 118,800 → Yahoo 수정주가로 복원 (process_sheet가 매번 덮어쓰므로 자동 복원됨)
-    # 5/11 실현: 98,485 → 100,400 복원 (실현 종목은 자동 갱신 안 되므로 수동 복원)
-    blocks = find_person_blocks(all_values)
-    for b in blocks:
-        if "이광훈" not in b["person"]:
-            continue
-        updates = []
-        for r in range(b["row_start"], b["row_end"] + 1):
-            ri = r - 1
-            if ri >= len(all_values): break
-            row = all_values[ri]
-            p_name = row[15] if len(row) > 15 else ""
-            p_rec  = row[16] if len(row) > 16 else ""
-            p_base = row[18] if len(row) > 18 else ""
-            if "티엘비" in p_name and p_rec == "2026-05-11" and p_base:
-                try:
-                    cur = float(str(p_base).replace(",", ""))
-                    if abs(cur - 98485) < 100:
-                        updates.append({"range": f"S{r}", "values": [[100400]]})
-                        updates.append({"range": f"U{r}", "values": [[f"=(T{r}-S{r})/S{r}"]]})
-                        print(f"  [롤백] 행{r} 실현 5/11 매수가 98485 → 100400 복원")
-                except: pass
-        if updates:
-            ws.batch_update(updates, value_input_option="USER_ENTERED")
-            all_values = ws.get_all_values()
-            print(f"  [롤백] 완료")
-        else:
-            print("  [롤백] 대상 없음 (이미 복원됨)")
-        break
-
     # 1. 대기 종목 추가
     added = process_pending(ws, all_values, today)
 
