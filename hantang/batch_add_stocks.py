@@ -1,4 +1,4 @@
-"""[일회성 진단] 시트 목록 + 마지막 시트 블록 구조 조회 — 읽기전용."""
+"""[일회성 진단2] Q2 시트 수식/구조 상세 덤프 — 읽기전용."""
 import os, json
 import gspread
 from google.oauth2.service_account import Credentials
@@ -6,23 +6,32 @@ SCOPES=["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth
 info=json.loads(os.environ["GSHEETS_CREDENTIALS"])
 gc=gspread.authorize(Credentials.from_service_account_info(info,scopes=SCOPES))
 ss=gc.open_by_key(os.environ["GSHEETS_ID"])
-print("=== 전체 워크시트(순서대로) ===")
-for i,s in enumerate(ss.worksheets()):
-    print(f"  [{i}] {s.title!r}  rows={s.row_count} cols={s.col_count}")
-sheets=[s for s in ss.worksheets() if not s.title.startswith("_")]
-last=sheets[-1]
-print(f"\n=== batch_add 대상(sheets[-1]) = {last.title!r} ===")
-vals=last.get_all_values()
-print(f"총 {len(vals)}행")
-# 블록 파싱
-hdr=[i+1 for i,r in enumerate(vals) if (r[9] if len(r)>9 else '')=='종목명']
-sog=[i+1 for i,r in enumerate(vals) if '실현수익률 소계' in str(r[15] if len(r)>15 else '')]
-print(f"헤더행: {hdr}\n소계행: {sog}")
-for h in hdr:
-    s=next((r for r in sog if r>h),None)
-    if not s: continue
-    name=(vals[h][8] if len(vals[h])>8 else '').strip().replace('\n','')
-    # 활성 종목 빈행 여부
-    filled=[ (r, vals[r-1][9]) for r in range(h+1,s) if r-1<len(vals) and (vals[r-1][9] if len(vals[r-1])>9 else '')]
-    empties=[ r for r in range(h+1,s) if r-1<len(vals) and not (vals[r-1][9] if len(vals[r-1])>9 else '')]
-    print(f"  블록 '{name}': 행{h+1}~{s-1} | 기존종목={[f[1] for f in filled]} | 빈행수={len(empties)}")
+ws=ss.worksheet("한탕(26년 2분기)")
+def col(n):
+    s=""
+    while n>0:
+        n,r=divmod(n-1,26); s=chr(65+r)+s
+    return s
+# values + formulas
+vals=ws.get_all_values()
+form=ws.get_all_values(value_render_option='FORMULA')
+print("=== 1~3행 (제목/헤더) values ===")
+for r in range(1,4):
+    print(f"R{r}:", [ (col(c+1), vals[r-1][c]) for c in range(len(vals[r-1])) if vals[r-1][c] ][:12])
+print("\n=== 안병열 블록: 채워진행 R4, 빈행 R14 — J~U values/formula ===")
+for r in [4,14,17,18]:
+    print(f"--- R{r} ---")
+    for c in range(10,22):  # J(10)~U(21)
+        v=vals[r-1][c] if len(vals[r-1])>c else ""
+        fo=form[r-1][c] if len(form[r-1])>c else ""
+        if v or fo:
+            print(f"   {col(c+1)}: val={v!r} formula={fo!r}")
+print("\n=== 실현(P~U) 데이터 있는 행 스캔 (안병열 4~17) ===")
+for r in range(4,18):
+    p=vals[r-1][15] if len(vals[r-1])>15 else ""
+    if p: print(f"   R{r} P={p!r}")
+print("\n=== 시장지표/하단 패널 위치 추정: '소계' 아래 마지막 블록 끝(234) 이후 행 ===")
+for r in range(234,246):
+    rowv=vals[r-1] if r-1<len(vals) else []
+    nz=[(col(c+1),rowv[c]) for c in range(len(rowv)) if rowv[c]]
+    if nz: print(f"   R{r}:", nz[:10])
