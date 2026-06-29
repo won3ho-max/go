@@ -49,6 +49,7 @@ CARD_H = 1080
 BG          = (248, 249, 252)
 BG_CARD     = (255, 255, 255)
 BG_HEADER   = (24, 28, 50)
+Q3_BG       = (252, 248, 239)   # 3분기 전용: 살짝 따뜻한 아이보리 (2분기와 구분)
 RED         = (220, 53, 69)
 GREEN       = (16, 163, 127)
 GOLD        = (255, 193, 7)
@@ -555,7 +556,8 @@ def generate_image(sheet_name: str, persons: list, today: datetime.date) -> str:
     market_data = fetch_market_data()
     print(f"  시장 지표: {len(market_data)}건")
 
-    img = Image.new("RGB", (CARD_W, CARD_H), BG)
+    page_bg = Q3_BG if "3분기" in str(sheet_name) else BG
+    img = Image.new("RGB", (CARD_W, CARD_H), page_bg)
     d   = ImageDraw.Draw(img)
     render_header(d, today, sheet_name, weather)
 

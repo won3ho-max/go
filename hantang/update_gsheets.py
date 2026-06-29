@@ -832,50 +832,67 @@ def today_kst():
     from datetime import timezone, timedelta
     return datetime.datetime.now(timezone(timedelta(hours=9))).date()
 
-def main():
-    today = today_kst()
-    print(f"=== 한탕 스터디 Google Sheets 업데이트 ({today}) ===\n")
+def has_active_positions(ws: gspread.Worksheet) -> bool:
+    """활성(미매도) 종목이 J열에 하나라도 있으면 True."""
+    vals = ws.get_all_values()
+    for b in find_person_blocks(vals):
+        for r in range(b["row_start"], b["row_end"] + 1):
+            if r - 1 < len(vals):
+                j = vals[r - 1][9] if len(vals[r - 1]) > 9 else ""
+                if str(j).strip():
+                    return True
+    return False
 
-    ss = get_spreadsheet()
-    # 마지막 시트 = 현재 분기
-    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
-    ws = sheets[-1]
-    print(f"[시트] {ws.title}")
 
+def process_quarter(ws: gspread.Worksheet, today: datetime.date, is_current: bool):
+    """한 분기 시트 처리: (현재 분기만 pending 추가) 현재가·자동매도·검증·portfolio·카드/텔레그램."""
+    print(f"\n[시트] {ws.title}  (current={is_current})")
     all_values = ws.get_all_values()
 
-    # 1. 대기 종목 추가
-    added = process_pending(ws, all_values, today)
+    # 1. 대기 종목 추가 (현재 분기 한정)
+    if is_current:
+        added = process_pending(ws, all_values, today)
+        if added:
+            all_values = ws.get_all_values()
 
     # 2. 현재가 업데이트 + 자동 매도
-    if added:
-        all_values = ws.get_all_values()   # pending 반영 시에만 재로드
     updated, sold, skipped = process_sheet(ws, today)
-
-    print("\n" + "="*50)
-    print(f"현재가 업데이트: {len(updated)}건")
-    print(f"자동 매도 처리:  {len(sold)}건")
-    if sold:
-        for s in sold: print(f"  · {s}")
+    print(f"  현재가 업데이트: {len(updated)}건 / 자동매도: {len(sold)}건")
+    for s in sold:
+        print(f"    · {s}")
     if skipped:
-        print(f"코드 미인식:     {len(skipped)}건")
+        print(f"  코드 미인식: {len(skipped)}건")
 
-    # 3. 실현 종목 매도일 소급 수정 (원칙 변경 반영)
-    fixed = fix_realized_sell_dates(ws, today)
-    if fixed:
-        for f in fixed: print(f"  · {f}")
+    # 3. 실현 매도일 소급 수정 + 매도가 검증
+    for f in (fix_realized_sell_dates(ws, today) or []):
+        print(f"    · {f}")
+    for pf in (verify_realized_prices(ws, today) or []):
+        print(f"    · {pf}")
 
-    # 3-1. 실현 종목 매도가 검증 (Yahoo 종가와 5% 이상 차이 시 수정)
-    price_fixed = verify_realized_prices(ws, today)
-    if price_fixed:
-        for pf in price_fixed: print(f"  · {pf}")
-
-    # 4. portfolio.json 내보내기
+    # 4. portfolio.json 내보내기 + 카드/텔레그램
     all_values = ws.get_all_values()
     export_portfolio_json(all_values, ws.title, today)
-
-    # 5. 카드뉴스 생성 + 텔레그램
     run_card_and_telegram(today)
+
+
+def main():
+    today = today_kst()
+    print(f"=== 한탕 스터디 Google Sheets 업데이트 ({today}) ===")
+
+    ss = get_spreadsheet()
+    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    current = sheets[-1]
+
+    # 현재 분기 처리
+    process_quarter(current, today, is_current=True)
+
+    # 이전 분기 중 활성 종목이 남은 시트도 갱신 (모든 종목 매도될 때까지)
+    for ws in sheets[:-1]:
+        if "테스트" in ws.title or "분기" not in ws.title:
+            continue
+        if has_active_positions(ws):
+            print(f"\n=== 이전 분기 갱신: {ws.title} (활성 종목 잔존) ===")
+            process_quarter(ws, today, is_current=False)
 
 
 if __name__ == "__main__":
