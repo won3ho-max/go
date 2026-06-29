@@ -886,13 +886,12 @@ def main():
     # 현재 분기 처리
     process_quarter(current, today, is_current=True)
 
-    # 이전 분기 중 활성 종목이 남은 시트도 갱신 (모든 종목 매도될 때까지)
-    for ws in sheets[:-1]:
-        if "테스트" in ws.title or "분기" not in ws.title:
-            continue
-        if has_active_positions(ws):
-            print(f"\n=== 이전 분기 갱신: {ws.title} (활성 종목 잔존) ===")
-            process_quarter(ws, today, is_current=False)
+    # 직전 분기(예: 2분기)만, 활성 종목이 남아있는 동안 갱신 (모두 매도되면 자동 제외)
+    if len(sheets) >= 2:
+        prev = sheets[-2]
+        if "분기" in prev.title and "테스트" not in prev.title and has_active_positions(prev):
+            print(f"\n=== 직전 분기 갱신: {prev.title} (활성 종목 잔존) ===")
+            process_quarter(prev, today, is_current=False)
 
 
 if __name__ == "__main__":
