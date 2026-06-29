@@ -582,7 +582,10 @@ def generate_image(sheet_name: str, persons: list, today: datetime.date) -> str:
     render_portfolio_grid(d, persons, grid_x, content_y, grid_w, content_h)
 
     render_footer(d, CARD_H - 32)
-    out = BASE_DIR / f"한탕_데일리_{today.strftime('%Y-%m-%d')}.png"
+    m_q = re.search(r"(\d+\s*분기)", str(sheet_name))
+    q_tag = m_q.group(1).replace(" ", "") if m_q else ""
+    suffix = f"_{q_tag}" if q_tag else ""
+    out = BASE_DIR / f"한탕_데일리{suffix}_{today.strftime('%Y-%m-%d')}.png"
     img.save(str(out), "PNG", optimize=True)
     print(f"카드뉴스 저장: {out.name} ({CARD_W}x{CARD_H})")
     return str(out)
@@ -595,7 +598,10 @@ def send_telegram(image_path: str, today: datetime.date):
     if not TELEGRAM_CHAT_IDS:
         print("[텔레그램] TELEGRAM_CHAT_ID 미설정")
         return
-    caption = f"한탕 스터디 데일리 리포트 {today}"
+    import os as _os
+    m_qc = re.search(r"(\d+분기)", _os.path.basename(image_path))
+    q_txt = f" ({m_qc.group(1)})" if m_qc else ""
+    caption = f"한탕 스터디 데일리 리포트{q_txt} {today}"
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
     for cid in TELEGRAM_CHAT_IDS:
         with open(image_path, "rb") as f:
