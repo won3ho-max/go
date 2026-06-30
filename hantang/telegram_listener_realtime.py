@@ -278,6 +278,16 @@ def main():
             "(현재 상태로는 그룹 일반 메시지를 수신하지 못합니다.)")
 
     offset = load_offset()
+    if not OFFSET_FILE.exists():
+        # 첫 실행: 텔레그램에 쌓인 과거 백로그(최대 24h)는 처리하지 않고 건너뛴다
+        try:
+            r0 = tg_get("getUpdates", offset=-1, timeout=0)
+            if r0.get("ok") and r0.get("result"):
+                offset = r0["result"][-1]["update_id"] + 1
+            save_offset(offset)
+            log(f"첫 실행 — 백로그 건너뜀 (offset={offset})")
+        except Exception as e:
+            log(f"[경고] 백로그 스킵 실패: {e}")
     log(f"시작 offset: {offset}")
     notify_admin(f"🟢 한탕 실시간 리스너 가동 (@{bot.get('username')})")
 
