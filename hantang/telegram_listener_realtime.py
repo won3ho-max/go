@@ -34,6 +34,7 @@ import requests
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ADMIN_CHAT_ID  = os.environ.get("ADMIN_CHAT_ID", "1633958343")
 GROUP_CHAT_ID  = os.environ.get("GROUP_CHAT_ID", "").strip()  # 빈값이면 모든 그룹 처리
+COLLECT_MODE   = os.environ.get("COLLECT_MODE", "").lower() in ("1", "true", "yes")  # 1일 수집 모드
 BASE_DIR       = Path(os.path.dirname(os.path.abspath(__file__)))
 OFFSET_FILE    = BASE_DIR / "_realtime_offset.txt"
 SCOPES         = [
@@ -48,6 +49,44 @@ SELL_TAGS = ("#매도", "#청산", "#매도종목")
 
 STUDY_MEMBERS = ["안병열", "김동환", "이광훈", "송지호",
                  "조형오", "어정윤", "이원호", "김태완"]
+
+_seen_senders = set()   # 수집 모드: 이미 보고한 보낸이 id
+
+
+def collect_sender(msg: dict, cache):
+    """수집 모드: 그룹 글쓴이의 id/username/표시이름을 개인텔레+_collect 시트에 1회 기록."""
+    frm = msg.get("from") or {}
+    uid = frm.get("id")
+    if uid is None or uid in _seen_senders:
+        return
+    _seen_senders.add(uid)
+    uname = frm.get("username", "") or ""
+    fname = ((frm.get("first_name", "") or "") + " " + (frm.get("last_name", "") or "")).strip()
+    sample = (msg.get("text", "") or msg.get("caption", "") or "")[:40]
+    try:
+        ss = cache.get_ss()
+        try:
+            wc = ss.worksheet("_collect")
+        except gspread.WorksheetNotFound:
+            wc = ss.add_worksheet(title="_collect", rows=200, cols=6)
+            wc.append_row(["ts", "user_id", "username", "name", "sample"])
+        wc.append_row([datetime.datetime.now().isoformat(timespec="seconds"),
+                       str(uid), uname, fname, sample])
+    except Exception as e:
+        log(f"[수집] 시트 기록 실패: {e}")
+    notify_admin(f"📇 수집: {fname} @{uname} id={uid}\n  예: {sample}")
+    log(f"[수집] {fname} @{uname} id={uid}")
+
+
+def load_seen_from_sheet(cache):
+    try:
+        ss = cache.get_ss()
+        wc = ss.worksheet("_collect")
+        for row in wc.get_all_values()[1:]:
+            if len(row) > 1 and row[1].strip().isdigit():
+                _seen_senders.add(int(row[1]))
+    except Exception:
+        pass
 
 
 def log(msg: str):
@@ -180,6 +219,11 @@ class SheetCache:
         self.values = None
         self.loaded_at = 0
 
+    def get_ss(self):
+        if self.ss is None:
+            self.ss = open_spreadsheet()
+        return self.ss
+
     def ensure(self):
         if self.ss is None:
             self.ss = open_spreadsheet()
@@ -202,6 +246,11 @@ def handle_message(msg: dict, cache: SheetCache):
 
     # 그룹 필터 (지정된 경우)
     if GROUP_CHAT_ID and str(chat_id) != GROUP_CHAT_ID:
+        return
+
+    # 수집 모드: 감지/기록 없이 보낸이 정보만 모은다
+    if COLLECT_MODE:
+        collect_sender(msg, cache)
         return
 
     action, person, stock = detect_action(text)
@@ -277,6 +326,10 @@ def main():
             "그룹에서 봇을 내보냈다가 다시 추가하세요.\n"
             "(현재 상태로는 그룹 일반 메시지를 수신하지 못합니다.)")
 
+    if COLLECT_MODE:
+        notify_admin("📇 수집 모드 ON — 1일간 그룹 글쓴이 정보를 모읍니다 (감지/기록 일시중지)")
+        log("수집 모드 ON")
+
     offset = load_offset()
     if not OFFSET_FILE.exists():
         # 첫 실행: 텔레그램에 쌓인 과거 백로그(최대 24h)는 처리하지 않고 건너뛴다
@@ -292,6 +345,9 @@ def main():
     notify_admin(f"🟢 한탕 실시간 리스너 가동 (@{bot.get('username')})")
 
     cache = SheetCache()
+    if COLLECT_MODE:
+        load_seen_from_sheet(cache)
+        log(f"기존 수집 인원: {len(_seen_senders)}명")
     backoff = 1
 
     while True:
