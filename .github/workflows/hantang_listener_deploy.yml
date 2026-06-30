@@ -1,0 +1,77 @@
+name: Deploy 한탕 실시간 리스너
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'hantang/telegram_listener_realtime.py'
+      - '.github/workflows/hantang_listener_deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH key setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Prepare credentials (base64)
+        id: prep
+        run: |
+          echo "CREDS_B64=$(printf '%s' '${{ secrets.GSHEETS_CREDENTIALS }}' | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy listener to GCP
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 \
+            "TOKEN='${{ secrets.HANTANG_TELEGRAM_TOKEN }}' SHEETID='${{ secrets.GSHEETS_ID }}' CREDS_B64='${{ steps.prep.outputs.CREDS_B64 }}' bash -s" << 'ENDSSH'
+          set -e
+          DIR=/home/won3ho/hantang_listener
+          mkdir -p "$DIR"
+
+          # 리스너 코드는 이미 인증된 news_bot 클론에서 가져온다 (별도 PAT 불필요)
+          cd /home/won3ho/news_bot
+          git fetch origin main
+          git checkout origin/main -- hantang/telegram_listener_realtime.py
+          cp /home/won3ho/news_bot/hantang/telegram_listener_realtime.py "$DIR/telegram_listener_realtime.py"
+
+          # 자격증명 / 시트ID
+          echo "$CREDS_B64" | base64 -d > "$DIR/credentials.json"
+          echo "$SHEETID" > "$DIR/gsheets_id.txt"
+          chmod 600 "$DIR/credentials.json"
+
+          # 파이썬 의존성
+          python3 -m pip install --quiet --upgrade gspread google-auth requests \
+            || pip3 install --quiet gspread google-auth requests
+
+          # systemd 유닛
+          sudo tee /etc/systemd/system/hantang_listener.service >/dev/null <<UNIT
+          [Unit]
+          Description=Hantang Telegram Realtime Listener
+          After=network.target
+
+          [Service]
+          User=won3ho
+          WorkingDirectory=$DIR
+          Environment=TELEGRAM_TOKEN=$TOKEN
+          Environment=GSHEETS_ID=$SHEETID
+          Environment=ADMIN_CHAT_ID=1633958343
+          ExecStart=/usr/bin/python3 $DIR/telegram_listener_realtime.py
+          Restart=on-failure
+          RestartSec=10
+          StandardOutput=append:/home/won3ho/hantang_listener.log
+          StandardError=append:/home/won3ho/hantang_listener.log
+
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable hantang_listener
+          sudo systemctl restart hantang_listener
+          sleep 3
+          sudo systemctl is-active hantang_listener && echo HANTANG_LISTENER_OK || echo HANTANG_LISTENER_FAIL
+          ENDSSH
