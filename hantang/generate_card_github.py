@@ -609,6 +609,11 @@ def send_telegram(image_path: str, today: datetime.date):
                 data={"chat_id": cid, "caption": caption},
                 files={"document": f}, timeout=30)
         print(f"  텔레그램 {'OK' if r.ok else 'FAIL'} (chat_id={cid})")
+        if not r.ok:
+            try:
+                print(f"    └ 오류 {r.status_code}: {r.text[:300]}")
+            except Exception:
+                pass
 
 # ── 메인 ────────────────────────────────────────────────────────────────
 def today_kst():
