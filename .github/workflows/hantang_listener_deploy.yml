@@ -43,9 +43,9 @@ jobs:
           echo "$SHEETID" > "$DIR/gsheets_id.txt"
           chmod 600 "$DIR/credentials.json"
 
-          # 파이썬 의존성
-          python3 -m pip install --quiet --upgrade gspread google-auth requests \
-            || pip3 install --quiet gspread google-auth requests
+          # 파이썬 의존성 (PEP668 외부관리 환경 → --break-system-packages)
+          python3 -m pip install --quiet --break-system-packages --upgrade gspread google-auth requests \
+            || python3 -m pip install --quiet --break-system-packages gspread google-auth requests
 
           # systemd 유닛
           sudo tee /etc/systemd/system/hantang_listener.service >/dev/null <<UNIT
