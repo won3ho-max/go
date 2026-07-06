@@ -5,42 +5,64 @@ on:
     paths:
       - 'news_bot/**'
       - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: SSH key setup
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H 34.57.78.164 >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Deploy
+      - name: Copy news_bot to VM
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 << 'ENDSSH'
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 "mkdir -p /home/won3ho/news_bot/news_bot"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            news_bot/main.py news_bot/collector.py news_bot/requirements.txt \
+            won3ho@34.57.78.164:/home/won3ho/news_bot/news_bot/
+
+      - name: Bootstrap and restart news bot
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 \
+            "NHTOKEN='${{ secrets.NH_BOT_TOKEN }}' ANTKEY='${{ secrets.ANTHROPIC_API_KEY }}' bash -s" << 'ENDSSH'
           set -e
-          cd ~/news_bot
-          git fetch origin main
-          git checkout origin/main -- news_bot/main.py
-          git checkout origin/main -- news_bot/collector.py
-          sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.NH_BOT_TOKEN }}|" ~/news_bot/news_bot/.env
-          sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=1633958343|" ~/news_bot/news_bot/.env
-          grep -q "^ANTHROPIC_API_KEY" ~/news_bot/news_bot/.env || echo "ANTHROPIC_API_KEY=" >> ~/news_bot/news_bot/.env
-          sed -i "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}|" ~/news_bot/news_bot/.env
-          printf '[Unit]\nDescription=NH News Bot\nAfter=network.target\n\n[Service]\nUser=won3ho\nWorkingDirectory=/home/won3ho/news_bot/news_bot\nExecStart=/usr/bin/python3 main.py\nRestart=on-failure\nRestartSec=10\nStandardOutput=append:/home/won3ho/bot.log\nStandardError=append:/home/won3ho/bot.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee /etc/systemd/system/news_bot.service > /dev/null
-          sudo systemctl stop news_bot 2>/dev/null || true
-          pkill -9 -f 'news_bot/news_bot/main.py' 2>/dev/null || true
-          sleep 2
+          DIR=/home/won3ho/news_bot/news_bot
+          mkdir -p "$DIR"
+          python3 -m pip --version >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip)
+          python3 -m pip install --quiet --break-system-packages -r "$DIR/requirements.txt" \
+            || python3 -m pip install --break-system-packages -r "$DIR/requirements.txt"
+          printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=1633958343\nANTHROPIC_API_KEY=%s\nCHECK_INTERVAL_MINUTES=30\n' "$NHTOKEN" "$ANTKEY" > "$DIR/.env"
+          chmod 600 "$DIR/.env"
+          sudo tee /etc/systemd/system/news_bot.service >/dev/null <<UNIT
+          [Unit]
+          Description=NH News Bot
+          After=network.target
+          [Service]
+          User=won3ho
+          WorkingDirectory=$DIR
+          ExecStart=/usr/bin/python3 main.py
+          Restart=on-failure
+          RestartSec=10
+          Environment=PYTHONUNBUFFERED=1
+          StandardOutput=append:/home/won3ho/bot.log
+          StandardError=append:/home/won3ho/bot.log
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
           sudo systemctl daemon-reload
           sudo systemctl enable news_bot
           sudo systemctl restart news_bot
           sleep 3
-          sudo systemctl is-active news_bot && echo "BOT_RUNNING_OK" || echo "BOT_START_FAILED"
+          sudo systemctl is-active news_bot && echo NEWSBOT_OK || echo NEWSBOT_FAIL
           ENDSSH
 
       - name: Send test message
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.NH_BOT_TOKEN }}/sendMessage" \
-            -d "chat_id=1633958343" \
-            -d "text=배포+완료+테스트"
+            -d "chat_id=1633958343" -d "text=뉴스봇 재배포 완료" > /dev/null

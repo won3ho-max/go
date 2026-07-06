@@ -12,47 +12,42 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: SSH key setup
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H 34.57.78.164 >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Prepare credentials (base64)
         id: prep
         run: |
           echo "CREDS_B64=$(printf '%s' '${{ secrets.GSHEETS_CREDENTIALS }}' | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy listener to GCP
+      - name: Copy listener to VM
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.50.62.215 \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 "mkdir -p /home/won3ho/hantang_listener"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no hantang/telegram_listener_realtime.py won3ho@34.57.78.164:/home/won3ho/hantang_listener/telegram_listener_realtime.py
+
+      - name: Bootstrap and restart listener
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 \
             "TOKEN='${{ secrets.HANTANG_TELEGRAM_TOKEN }}' SHEETID='${{ secrets.GSHEETS_ID }}' CREDS_B64='${{ steps.prep.outputs.CREDS_B64 }}' bash -s" << 'ENDSSH'
           set -e
           DIR=/home/won3ho/hantang_listener
           mkdir -p "$DIR"
-
-          # 리스너 코드는 이미 인증된 news_bot 클론에서 가져온다 (별도 PAT 불필요)
-          cd /home/won3ho/news_bot
-          git fetch origin main
-          git checkout origin/main -- hantang/telegram_listener_realtime.py
-          cp /home/won3ho/news_bot/hantang/telegram_listener_realtime.py "$DIR/telegram_listener_realtime.py"
-
-          # 자격증명 / 시트ID
           echo "$CREDS_B64" | base64 -d > "$DIR/credentials.json"
           echo "$SHEETID" > "$DIR/gsheets_id.txt"
           chmod 600 "$DIR/credentials.json"
-
-          # 파이썬 의존성 (PEP668 외부관리 환경 → --break-system-packages)
+          python3 -m pip --version >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip)
           python3 -m pip install --quiet --break-system-packages --upgrade gspread google-auth requests \
-            || python3 -m pip install --quiet --break-system-packages gspread google-auth requests
-
-          # systemd 유닛
+            || python3 -m pip install --break-system-packages gspread google-auth requests
           sudo tee /etc/systemd/system/hantang_listener.service >/dev/null <<UNIT
           [Unit]
           Description=Hantang Telegram Realtime Listener
           After=network.target
-
           [Service]
           User=won3ho
           WorkingDirectory=$DIR
@@ -64,11 +59,9 @@ jobs:
           RestartSec=10
           StandardOutput=append:/home/won3ho/hantang_listener.log
           StandardError=append:/home/won3ho/hantang_listener.log
-
           [Install]
           WantedBy=multi-user.target
           UNIT
-
           sudo systemctl daemon-reload
           sudo systemctl enable hantang_listener
           sudo systemctl restart hantang_listener
