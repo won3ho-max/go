@@ -1,4 +1,5 @@
 import feedparser
+# redeploy: 봇 재기동 (서버 프로세스 중단 복구) @ 2026-07-06T05:32Z
 import requests
 import hashlib
 import json
