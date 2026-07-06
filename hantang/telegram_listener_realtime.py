@@ -50,6 +50,18 @@ SELL_TAGS = ("#매도", "#청산", "#매도종목")
 STUDY_MEMBERS = ["안병열", "김동환", "이광훈", "송지호",
                  "조형오", "어정윤", "이원호", "김태완"]
 
+# 텔레그램 user_id → 스터디 멤버 (수집 결과 기반 매핑)
+MEMBER_MAP = {
+    304508615:  "안병열",
+    6299662296: "김동환",
+    5495509979: "송지호",
+    5806062535: "김태완",
+    7153765145: "이광훈",   # KH / @kjrwq
+    656841455:  "어정윤",   # Jy
+    721276353:  "조형오",   # 모모
+    1087968824: "이원호",   # 익명 GroupAnonymousBot = 원호 본인
+}
+
 _seen_senders = set()   # 수집 모드: 이미 보고한 보낸이 id
 
 
@@ -211,6 +223,25 @@ def detect_action(text: str):
     return action, person, stock
 
 
+def detect_tag(text: str):
+    """매수/매도 태그만 판별 (신원은 보낸이 user_id로 확정)."""
+    if not text:
+        return None
+    if any(t in text for t in SELL_TAGS):
+        return "sell"
+    if any(t in text for t in BUY_TAGS):
+        return "buy"
+    return None
+
+
+def stock_candidate(text: str) -> str:
+    """원문에서 종목명 후보(해시태그·기호 제거 후 첫 토큰)."""
+    clean = re.sub(r"#\S+", "", text or "")
+    clean = re.sub(r"[\(\)\[\]:,/]", " ", clean).strip()
+    toks = clean.split()
+    return toks[0] if toks else ""
+
+
 # ── 처리 ──────────────────────────────────────────────────────────────────
 class SheetCache:
     def __init__(self):
@@ -253,44 +284,29 @@ def handle_message(msg: dict, cache: SheetCache):
         collect_sender(msg, cache)
         return
 
-    action, person, stock = detect_action(text)
-    if action is None:
-        return  # 추천/매도 관련 아님 → 무시(알림 없음)
+    tag = detect_tag(text)
+    if tag is None:
+        return  # 매수/매도 태그 없음 → 무시(알림 없음)
 
-    rec_date = datetime.date.today()
+    frm = msg.get("from") or {}
+    sid = frm.get("id")
+    member = MEMBER_MAP.get(sid)
+    who = member if member else f"미매핑(id={sid}, {sender})"
+    cand = stock_candidate(text)
+    body = text.strip().replace("\n", " ")[:200]
 
-    if action == "buy":
-        if not (person and stock):
-            notify_admin(
-                f"⚠️ 매수 감지했으나 파싱 실패\n"
-                f"보낸이: {sender}\n원문: {text[:120]}\n"
-                f"→ 형식: <이름> <종목> #종목추천")
-            log(f"[파싱실패-매수] {text!r}")
-            return
-        ws, values = cache.ensure()
-        ok, result = add_stock(ws, values, person, stock, rec_date)
-        if ok:
-            cache.refresh()
-        icon = "✅" if ok else "❌"
+    if tag == "buy":
         notify_admin(
-            f"{icon} 매수 감지 ({rec_date})\n"
-            f"  {person} / {stock}\n  {result}")
-        log(f"[매수-{'기록' if ok else '실패'}] {person}/{stock}: {result}")
-
-    elif action == "sell":
-        # 매도는 자동 기록하지 않음 (매도가는 매도일 종가여야 하므로 manual_sell로 처리)
-        if person and stock:
-            notify_admin(
-                f"🔔 매도 감지 ({rec_date})\n"
-                f"  {person} / {stock}\n"
-                f"  ※ 자동기록 안 함 — manual_sell로 확정 필요\n"
-                f"  (매도가는 매도일 종가 기준)")
-            log(f"[매도감지] {person}/{stock}")
-        else:
-            notify_admin(
-                f"🔔 매도 감지(파싱 일부 실패)\n"
-                f"보낸이: {sender}\n원문: {text[:120]}")
-            log(f"[파싱실패-매도] {text!r}")
+            f"🟢 매수 감지 — {who}\n"
+            f"후보종목: {cand}\n원문: {body}\n"
+            f"※ 시트 기록은 batch_add로 확정")
+        log(f"[매수감지] {who} / {cand}")
+    else:  # sell
+        notify_admin(
+            f"🔴 매도 감지 — {who}\n"
+            f"후보종목: {cand}\n원문: {body}\n"
+            f"※ manual_sell로 확정 (매도가=매도일 종가)")
+        log(f"[매도감지] {who} / {cand}")
 
 
 # ── offset 영속화 (로컬 파일) ─────────────────────────────────────────────

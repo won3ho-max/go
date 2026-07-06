@@ -59,7 +59,6 @@ jobs:
           Environment=TELEGRAM_TOKEN=$TOKEN
           Environment=GSHEETS_ID=$SHEETID
           Environment=ADMIN_CHAT_ID=1633958343
-          Environment=COLLECT_MODE=1
           ExecStart=/usr/bin/python3 $DIR/telegram_listener_realtime.py
           Restart=on-failure
           RestartSec=10
