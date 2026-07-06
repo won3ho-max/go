@@ -42,8 +42,8 @@ jobs:
           echo "$SHEETID" > "$DIR/gsheets_id.txt"
           chmod 600 "$DIR/credentials.json"
           python3 -m pip --version >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip)
-          python3 -m pip install --quiet --break-system-packages --upgrade gspread google-auth requests \
-            || python3 -m pip install --break-system-packages gspread google-auth requests
+          python3 -m pip install --quiet gspread google-auth requests \
+            || python3 -m pip install --quiet --break-system-packages gspread google-auth requests
           sudo tee /etc/systemd/system/hantang_listener.service >/dev/null <<UNIT
           [Unit]
           Description=Hantang Telegram Realtime Listener

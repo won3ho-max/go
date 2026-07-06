@@ -35,8 +35,8 @@ jobs:
           DIR=/home/won3ho/news_bot/news_bot
           mkdir -p "$DIR"
           python3 -m pip --version >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip)
-          python3 -m pip install --quiet --break-system-packages -r "$DIR/requirements.txt" \
-            || python3 -m pip install --break-system-packages -r "$DIR/requirements.txt"
+          python3 -m pip install --quiet -r "$DIR/requirements.txt" \
+            || python3 -m pip install --quiet --break-system-packages -r "$DIR/requirements.txt"
           printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=1633958343\nANTHROPIC_API_KEY=%s\nCHECK_INTERVAL_MINUTES=30\n' "$NHTOKEN" "$ANTKEY" > "$DIR/.env"
           chmod 600 "$DIR/.env"
           sudo tee /etc/systemd/system/news_bot.service >/dev/null <<UNIT
