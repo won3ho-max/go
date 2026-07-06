@@ -17,7 +17,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H 34.50.62.215 >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Prepare credentials (base64)
         id: prep
