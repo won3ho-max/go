@@ -236,11 +236,14 @@ def detect_tag(text: str):
 
 
 def stock_candidate(text: str) -> str:
-    """원문에서 종목명 후보(해시태그·기호 제거 후 첫 토큰)."""
+    """원문에서 종목명 추출(해시태그·기호 제거 후 공백 정리한 전체)."""
     clean = re.sub(r"#\S+", "", text or "")
-    clean = re.sub(r"[\(\)\[\]:,/]", " ", clean).strip()
-    toks = clean.split()
-    return toks[0] if toks else ""
+    clean = re.sub(r"[\(\)\[\]{}<>:;,/|]", " ", clean)
+    return " ".join(clean.split()).strip()
+
+
+def today_kst():
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).date()
 
 
 # ── 처리 ──────────────────────────────────────────────────────────────────
@@ -297,16 +300,26 @@ def handle_message(msg: dict, cache: SheetCache):
     body = text.strip().replace("\n", " ")[:200]
 
     if tag == "buy":
-        notify_admin(
-            f"🟢 매수 감지 — {who}\n"
-            f"후보종목: {cand}\n원문: {body}\n"
-            f"※ 시트 기록은 batch_add로 확정")
-        log(f"[매수감지] {who} / {cand}")
+        if not member:
+            notify_admin(f"🟢 매수 감지(미매핑) — id={sid} {sender}\n원문: {body}\n"
+                         f"※ 멤버 매핑 안 됨 → 자동기록 안 함")
+            log(f"[매수-미매핑] id={sid} / {cand}")
+            return
+        if not cand:
+            notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
+                         f"※ 종목명 추출 실패 → 자동기록 안 함")
+            log(f"[매수-종목없음] {member}")
+            return
+        ws, values = cache.ensure()
+        ok, result = add_stock(ws, values, member, cand, today_kst())
+        if ok:
+            cache.refresh()
+        icon = "✅" if ok else "❌"
+        notify_admin(f"{icon} 매수 자동기록 — {member} / {cand}\n원문: {body}\n{result}")
+        log(f"[매수-{'기록' if ok else '실패'}] {member}/{cand}: {result}")
     else:  # sell
-        notify_admin(
-            f"🔴 매도 감지 — {who}\n"
-            f"후보종목: {cand}\n원문: {body}\n"
-            f"※ manual_sell로 확정 (매도가=매도일 종가)")
+        notify_admin(f"🔴 매도 감지 — {who}\n후보종목: {cand}\n원문: {body}\n"
+                     f"※ 매도는 알림만 — manual_sell로 확정(매도가=매도일 종가)")
         log(f"[매도감지] {who} / {cand}")
 
 
