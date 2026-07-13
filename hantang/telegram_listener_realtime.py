@@ -235,11 +235,62 @@ def detect_tag(text: str):
     return None
 
 
-def stock_candidate(text: str) -> str:
-    """원문에서 종목명 추출(해시태그·기호 제거 후 공백 정리한 전체)."""
-    clean = re.sub(r"#\S+", "", text or "")
-    clean = re.sub(r"[\(\)\[\]{}<>:;,/|]", " ", clean)
-    return " ".join(clean.split()).strip()
+_LEAD_NOISE = {"매수", "매도", "추천", "재추천", "종목추천", "종목", "추천주",
+               "신규", "비중확대", "분할매수", "오늘", "매수추천"}
+_stock_cache = {}
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[\s\(\)\[\]{}]", "", s or "").upper()
+
+
+def _naver_lookup(cand: str):
+    """네이버 금융 검색으로 후보가 '정확히 일치'하는 종목이면 정식명 반환(오탐 방지)."""
+    if cand in _stock_cache:
+        return _stock_cache[cand]
+    res = None
+    try:
+        r = requests.get("https://ac.stock.naver.com/ac",
+                         params={"q": cand, "target": "stock"},
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=6).json()
+        items = r.get("items", [])
+        cn = _norm(cand)
+        for pref in ("KR", "US"):
+            for it in items:
+                nm = it.get("name", ""); tc = it.get("typeCode", "")
+                is_kr = tc in ("KOSPI", "KOSDAQ")
+                if pref == "KR" and not is_kr:
+                    continue
+                if pref == "US" and is_kr:
+                    continue
+                if nm and _norm(nm) == cn:
+                    res = nm; break
+            if res:
+                break
+    except Exception as e:
+        log(f"[종목조회 실패] {cand}: {e}")
+    _stock_cache[cand] = res
+    return res
+
+
+def resolve_stock(text: str):
+    """메시지 앞부분(첫 줄)에서 실제 종목명을 확정. 앞 토큰을 길->짧게 대조.
+    정확 일치가 없으면 None(→ 자동기록 안 하고 알림)."""
+    if not text:
+        return None
+    t = text.replace("#", " ")
+    first = t.split("\n")[0]
+    first = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", first)
+    toks = [w for w in first.split() if w]
+    while toks and (toks[0] in _LEAD_NOISE or re.fullmatch(r"\d+[.)]?", toks[0])):
+        toks.pop(0)
+    if not toks:
+        return None
+    for n in range(min(6, len(toks)), 0, -1):
+        official = _naver_lookup(" ".join(toks[:n]))
+        if official:
+            return official
+    return None
 
 
 def today_kst():
@@ -296,31 +347,33 @@ def handle_message(msg: dict, cache: SheetCache):
     sid = frm.get("id")
     member = MEMBER_MAP.get(sid)
     who = member if member else f"미매핑(id={sid}, {sender})"
-    cand = stock_candidate(text)
     body = text.strip().replace("\n", " ")[:200]
 
     if tag == "buy":
         if not member:
             notify_admin(f"🟢 매수 감지(미매핑) — id={sid} {sender}\n원문: {body}\n"
                          f"※ 멤버 매핑 안 됨 → 자동기록 안 함")
-            log(f"[매수-미매핑] id={sid} / {cand}")
+            log(f"[매수-미매핑] id={sid}")
             return
-        if not cand:
+        stock = resolve_stock(text)
+        if not stock:
             notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
-                         f"※ 종목명 추출 실패 → 자동기록 안 함")
-            log(f"[매수-종목없음] {member}")
+                         f"※ 종목명 자동인식 실패 → 자동기록 안 함(수동 확정 필요)")
+            log(f"[매수-미인식] {member}")
             return
         ws, values = cache.ensure()
-        ok, result = add_stock(ws, values, member, cand, today_kst())
+        ok, result = add_stock(ws, values, member, stock, today_kst())
         if ok:
             cache.refresh()
         icon = "✅" if ok else "❌"
-        notify_admin(f"{icon} 매수 자동기록 — {member} / {cand}\n원문: {body}\n{result}")
-        log(f"[매수-{'기록' if ok else '실패'}] {member}/{cand}: {result}")
+        notify_admin(f"{icon} 매수 자동기록 — {member} / {stock}\n원문: {body}\n{result}")
+        log(f"[매수-{'기록' if ok else '실패'}] {member}/{stock}: {result}")
     else:  # sell
-        notify_admin(f"🔴 매도 감지 — {who}\n후보종목: {cand}\n원문: {body}\n"
+        stock = resolve_stock(text)
+        shown = stock if stock else "(자동인식 실패)"
+        notify_admin(f"🔴 매도 감지 — {who}\n종목: {shown}\n원문: {body}\n"
                      f"※ 매도는 알림만 — manual_sell로 확정(매도가=매도일 종가)")
-        log(f"[매도감지] {who} / {cand}")
+        log(f"[매도감지] {who} / {shown}")
 
 
 # ── offset 영속화 (로컬 파일) ─────────────────────────────────────────────
