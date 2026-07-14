@@ -274,22 +274,22 @@ def _naver_lookup(cand: str):
 
 
 def resolve_stock(text: str):
-    """메시지 앞부분(첫 줄)에서 실제 종목명을 확정. 앞 토큰을 길->짧게 대조.
-    정확 일치가 없으면 None(→ 자동기록 안 하고 알림)."""
+    """메시지 앞 5줄을 훑어 각 줄 앞 토큰(노이즈 제거)을 길->짧게 네이버에 대조.
+    종목명이 태그와 다른 줄에 있어도 인식. 정확 일치가 없으면 None(→ 알림)."""
     if not text:
         return None
     t = text.replace("#", " ")
-    first = t.split("\n")[0]
-    first = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", first)
-    toks = [w for w in first.split() if w]
-    while toks and (toks[0] in _LEAD_NOISE or re.fullmatch(r"\d+[.)]?", toks[0])):
-        toks.pop(0)
-    if not toks:
-        return None
-    for n in range(min(6, len(toks)), 0, -1):
-        official = _naver_lookup(" ".join(toks[:n]))
-        if official:
-            return official
+    for line in t.split("\n")[:5]:
+        line = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", line)
+        toks = [w for w in line.split() if w]
+        while toks and (toks[0] in _LEAD_NOISE or re.fullmatch(r"\d+[.)]?", toks[0])):
+            toks.pop(0)
+        if not toks:
+            continue
+        for n in range(min(5, len(toks)), 0, -1):
+            official = _naver_lookup(" ".join(toks[:n]))
+            if official:
+                return official
     return None
 
 
