@@ -193,6 +193,84 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date):
     return True, f"{person_name} / {stock_name} 기록 완료 (기준가는 오늘 장 마감 후 자동입력)"
 
 
+def _pending_add(cache, sheet_title, row, name, sell_date):
+    """자동매도한 행을 _pending_sell에 남겨 데일리가 매도일 종가로 확정하게 한다."""
+    try:
+        ss = cache.get_ss()
+        try:
+            wp = ss.worksheet("_pending_sell")
+        except gspread.WorksheetNotFound:
+            wp = ss.add_worksheet(title="_pending_sell", rows=200, cols=5)
+            wp.append_row(["sheet", "row", "stock", "sell_date"])
+        wp.append_row([sheet_title, str(row), name, str(sell_date)])
+    except Exception as e:
+        log(f"[경고] _pending_sell 기록 실패: {e}")
+
+
+def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache):
+    """가장 과거(위쪽) 매칭 활성 종목을 실현 섹션으로 이동. manual_sell과 동일 규칙."""
+    blocks = find_person_blocks(all_values)
+    block = next((b for b in blocks
+                  if b["person"] == person_name or person_name in b["person"]), None)
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    stock_row = None
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            continue
+        j = all_values[idx][9] if len(all_values[idx]) > 9 else ""
+        if j and (stock_name in str(j) or str(j).strip() in stock_name):
+            stock_row = r
+            break
+    if stock_row is None:
+        return False, f"'{stock_name}' 활성 종목을 찾을 수 없음"
+
+    row = all_values[stock_row - 1]
+    orig     = row[9]  if len(row) > 9  else ""
+    rec_date = row[10] if len(row) > 10 else ""
+    base     = row[11] if len(row) > 11 else ""
+    cur      = row[12] if len(row) > 12 else ""
+
+    p_row = None
+    for r in range(block["row_start"], block["row_end"] + 1):
+        ri = r - 1
+        if ri >= len(all_values):
+            break
+        pv = all_values[ri][15] if len(all_values[ri]) > 15 else ""
+        if not pv or not pv.strip():
+            p_row = r
+            break
+    if p_row is None:
+        return False, "실현 섹션에 빈 행 없음"
+
+    try:
+        base_f = float(str(base).replace(",", ""))
+    except Exception:
+        return False, f"기준가 파싱 실패: {base!r}"
+    try:
+        price = float(str(cur).replace(",", ""))
+    except Exception:
+        price = base_f
+
+    ws.batch_update([
+        {"range": f"P{p_row}", "values": [[orig]]},
+        {"range": f"Q{p_row}", "values": [[rec_date]]},
+        {"range": f"R{p_row}", "values": [[str(sell_date)]]},
+        {"range": f"S{p_row}", "values": [[base_f]]},
+        {"range": f"T{p_row}", "values": [[price]]},
+        {"range": f"U{p_row}", "values": [[f"=(T{p_row}-S{p_row})/S{p_row}"]]},
+        {"range": f"J{stock_row}:N{stock_row}", "values": [["", "", "", "", ""]]},
+    ], value_input_option="USER_ENTERED")
+
+    _pending_add(cache, ws.title, p_row, orig, sell_date)
+    ret = (price - base_f) / base_f * 100 if base_f else 0.0
+    return True, (f"{orig} 매도 (추천일 {rec_date} → 매도일 {sell_date}, 행 {stock_row}→실현 {p_row})\n"
+                  f"기준가 {base_f:,.0f} → 매도가 {price:,.0f} ({ret:+.2f}%)\n"
+                  f"※ 매도가는 오늘 밤 데일리가 매도일 종가로 확정")
+
+
 # ── 메시지 파싱 ───────────────────────────────────────────────────────────
 def detect_action(text: str):
     """반환: ('buy'|'sell'|None, person, stock)
@@ -369,11 +447,24 @@ def handle_message(msg: dict, cache: SheetCache):
         notify_admin(f"{icon} 매수 자동기록 — {member} / {stock}\n원문: {body}\n{result}")
         log(f"[매수-{'기록' if ok else '실패'}] {member}/{stock}: {result}")
     else:  # sell
+        if not member:
+            notify_admin(f"🔴 매도 감지(미매핑) — id={sid} {sender}\n원문: {body}\n"
+                         f"※ 멤버 매핑 안 됨 → 자동처리 안 함")
+            log(f"[매도-미매핑] id={sid}")
+            return
         stock = resolve_stock(text)
-        shown = stock if stock else "(자동인식 실패)"
-        notify_admin(f"🔴 매도 감지 — {who}\n종목: {shown}\n원문: {body}\n"
-                     f"※ 매도는 알림만 — manual_sell로 확정(매도가=매도일 종가)")
-        log(f"[매도감지] {who} / {shown}")
+        if not stock:
+            notify_admin(f"🔴 매도 감지 — {member}\n원문: {body}\n"
+                         f"※ 종목명 자동인식 실패 → 자동처리 안 함(수동 확정 필요)")
+            log(f"[매도-미인식] {member}")
+            return
+        ws, values = cache.ensure()
+        ok, result = sell_stock(ws, values, member, stock, today_kst(), cache)
+        if ok:
+            cache.refresh()
+        icon = "✅" if ok else "❌"
+        notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}")
+        log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result}")
 
 
 # ── offset 영속화 (로컬 파일) ─────────────────────────────────────────────

@@ -832,6 +832,52 @@ def today_kst():
     from datetime import timezone, timedelta
     return datetime.datetime.now(timezone(timedelta(hours=9))).date()
 
+def fix_pending_sells(ss, today: datetime.date):
+    """리스너가 자동매도한 행(_pending_sell)의 매도가(T)를 매도일 종가로 확정한다.
+    과거 데이터는 건드리지 않고, 목록에 있는 행만 정정 후 목록에서 제거."""
+    try:
+        wp = ss.worksheet("_pending_sell")
+    except gspread.WorksheetNotFound:
+        return []
+    rows = wp.get_all_values()
+    if len(rows) < 2:
+        return []
+
+    header, keep, fixed = rows[0], [], []
+    for r in rows[1:]:
+        if len(r) < 4:
+            continue
+        title, row_s, name, sd = r[0], r[1], r[2], r[3]
+        try:
+            row_i = int(str(row_s).strip())
+            sell_date = datetime.date.fromisoformat(str(sd).strip()[:10])
+        except Exception:
+            continue
+        if sell_date >= today:
+            keep.append(r)          # 아직 종가 미확정 → 다음 실행에 처리
+            continue
+        try:
+            ws2 = ss.worksheet(title)
+        except Exception:
+            continue
+        market, code = parse_stock(str(name).strip())
+        if not market or not code:
+            continue
+        correct = fetch_price(market, code, sell_date)
+        if correct is None:
+            keep.append(r)          # 조회 실패 → 다음 실행에 재시도
+            continue
+        ws2.batch_update([
+            {"range": f"T{row_i}", "values": [[correct]]},
+            {"range": f"U{row_i}", "values": [[f"=(T{row_i}-S{row_i})/S{row_i}"]]},
+        ], value_input_option="USER_ENTERED")
+        fixed.append(f"{name} {title} R{row_i} 매도가 → {correct:,} ({sell_date} 종가 확정)")
+
+    wp.clear()
+    wp.append_rows([header] + keep)
+    return fixed
+
+
 def has_active_positions(ws: gspread.Worksheet) -> bool:
     """활성(미매도) 종목이 J열에 하나라도 있으면 True."""
     vals = ws.get_all_values()
@@ -882,6 +928,10 @@ def main():
     ss = get_spreadsheet()
     sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
     current = sheets[-1]
+
+    # 리스너 자동매도분 매도가를 종가로 확정
+    for f in (fix_pending_sells(ss, today) or []):
+        print(f"  · {f}")
 
     # 현재 분기 처리
     process_quarter(current, today, is_current=True)
