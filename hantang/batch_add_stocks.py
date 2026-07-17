@@ -1,32 +1,113 @@
-"""[일회성 진단] 불일치 7건: 매도일 전후 종가 스캔 — 읽기전용."""
-import os, sys, datetime
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import update_gsheets as U
-import yfinance as yf
+"""
+GitHub Actions용 종목 일괄 추가 스크립트
+─────────────────────────────────────────
+텔레그램 없이 직접 Google Sheets에 종목을 추가한다.
 
-CASES=[("조형오","SGC에너지","2026-06-03",50100.0),
-       ("김동환","카르만 홀딩스(KRMN)","2026-05-05",65.32),
-       ("송지호","아이씨티케이","2026-06-03",28900.0),
-       ("이광훈","나노신소재","2026-06-03",62500.0),
-       ("김동환","SK텔레콤","2026-05-12",103400.0),
-       ("김태완","POSCO홀딩스","2026-06-03",399000.0),
-       ("조형오","롯데쇼핑","2026-05-26",158500.0),
-       ("조형오","동성화인텍","2026-05-12",None)]
-for person,name,sd,rec in CASES:
-    d=datetime.date.fromisoformat(sd)
-    market,code=U.parse_stock(name)
-    if not market or not code:
-        print(f"{person}/{name}: 코드 미인식"); continue
-    tick = code + (".KQ" if code in U.KOSDAQ_CODES else ".KS") if market=="KR" else code
-    try:
-        h=yf.Ticker(tick).history(start=str(d-datetime.timedelta(days=6)),
-                                  end=str(d+datetime.timedelta(days=6)), prepost=False)
-    except Exception as e:
-        print(f"{person}/{name}: 조회오류 {e}"); continue
-    print(f"\n[{person} / {name}] 기록매도가={rec} 매도일={sd} ({tick})")
-    for ts,row in h.iterrows():
-        day=ts.date()
-        mark=" ←매도일" if day==d else ""
-        hit=""
-        if rec is not None and abs(float(row['Close'])-rec)/max(rec,1) < 0.005: hit="  ★기록값과 일치"
-        print(f"   {day} 종가 {float(row['Close']):,.2f}{mark}{hit}")
+환경변수:
+  GSHEETS_CREDENTIALS  - 서비스 계정 JSON 문자열
+  GSHEETS_ID           - 스프레드시트 ID
+  STOCKS               - "이름:종목명,이름:종목명,..." 형식
+  REC_DATE             - 추천일 (YYYY-MM-DD), 미입력 시 이번 주 월요일
+"""
+
+import os, sys, json, datetime
+
+import gspread
+from google.oauth2.service_account import Credentials
+
+SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+def get_worksheet():
+    info = json.loads(os.environ["GSHEETS_CREDENTIALS"])
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    gc = gspread.authorize(creds)
+    ss = gc.open_by_key(os.environ["GSHEETS_ID"])
+    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    return sheets[-1]
+
+
+def find_person_blocks(all_values):
+    header_rows, sogyae_rows = [], []
+    for i, row in enumerate(all_values):
+        j = row[9] if len(row) > 9 else ""
+        p = row[15] if len(row) > 15 else ""
+        if j == "종목명":
+            header_rows.append(i + 1)
+        if "실현수익률 소계" in str(p):
+            sogyae_rows.append(i + 1)
+
+    blocks = []
+    for h_row in header_rows:
+        s_row = next((r for r in sogyae_rows if r > h_row), None)
+        if not s_row:
+            continue
+        i_val = all_values[h_row][8] if len(all_values[h_row]) > 8 else ""
+        person = str(i_val).strip().replace("\n", "") if i_val else ""
+        blocks.append({"person": person, "row_start": h_row + 1, "row_end": s_row - 1})
+    return blocks
+
+
+def add_stock(ws, all_values, person_name, stock_name, rec_date):
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    # 중복 체크 없음 — 재추천 시 새 행으로 추가
+
+    empty_row = next(
+        (r for r in range(block["row_start"], block["row_end"] + 1)
+         if r - 1 < len(all_values)
+         and not (all_values[r - 1][9] if len(all_values[r - 1]) > 9 else "")),
+        None,
+    )
+    if not empty_row:
+        return False, f"'{person_name}' 블록에 빈 행 없음"
+
+    cell_j = gspread.Cell(row=empty_row, col=10, value=stock_name)
+    cell_k = gspread.Cell(row=empty_row, col=11, value=str(rec_date))
+    ws.update_cells([cell_j, cell_k], value_input_option="USER_ENTERED")
+    return True, f"{person_name} / {stock_name} 추가 완료"
+
+
+def get_rec_date(date_str=None):
+    """명시적 날짜가 있으면 그대로 사용, 없으면 이번 주 월요일"""
+    if date_str:
+        return datetime.date.fromisoformat(date_str)
+    d = datetime.date.today()
+    return d - datetime.timedelta(days=d.weekday())
+
+
+def run():
+    stocks_raw = os.environ.get("STOCKS", "")
+    rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
+
+    if not stocks_raw:
+        print("[오류] STOCKS 환경변수 미설정")
+        sys.exit(1)
+
+    pairs = [s.strip().split(":") for s in stocks_raw.split(",") if ":" in s]
+    print(f"추천일: {rec_date}")
+    print(f"입력 종목: {len(pairs)}건\n")
+
+    ws = get_worksheet()
+    all_vals = ws.get_all_values()
+
+    for person, stock in pairs:
+        ok, msg = add_stock(ws, all_vals, person.strip(), stock.strip(), rec_date)
+        print(f"  {'✅' if ok else '❌'} {msg}")
+        if ok:
+            all_vals = ws.get_all_values()
+
+    print(f"\n처리 완료")
+
+
+if __name__ == "__main__":
+    run()
