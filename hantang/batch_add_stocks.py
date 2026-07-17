@@ -1,4 +1,4 @@
-"""[일회성] 3분기 어정윤 ANET 분석글 쓰레기 행 삭제 (아리스타 네트웍스(ANET)와 중복)."""
+"""[일회성] 실수로 지운 어정윤 RAM(6/29) 복원. R112 J/K만 복구 → 데일리가 L/M/N 재계산."""
 import os, json
 import gspread
 from google.oauth2.service_account import Credentials
@@ -7,36 +7,20 @@ info=json.loads(os.environ["GSHEETS_CREDENTIALS"])
 gc=gspread.authorize(Credentials.from_service_account_info(info,scopes=SCOPES))
 ss=gc.open_by_key(os.environ["GSHEETS_ID"])
 ws=ss.worksheet("한탕(26년 3분기)")
-vals=ws.get_all_values()
-hdr=[i+1 for i,r in enumerate(vals) if (r[9] if len(r)>9 else '')=='종목명']
-sog=[i+1 for i,r in enumerate(vals) if '실현수익률 소계' in str(r[15] if len(r)>15 else '')]
-targets=[]
-for h in hdr:
-    s=next((r for r in sog if r>h),None)
-    if not s: continue
-    nm=(vals[h][8] if len(vals[h])>8 else '').replace('\n','')
-    for r in range(h+1,s):
-        j=vals[r-1][9] if len(vals[r-1])>9 else ''
-        if j and len(j) > 40:      # 정상 종목명은 40자 넘지 않음 → 분석글 오염
-            targets.append((nm,r,j[:45]))
-print("오염(분석글) 행:", len(targets))
-for nm,r,prev in targets:
-    print(f"  {nm} R{r}: {prev}...")
-if targets:
-    ws.batch_update([{"range": f"J{r}:N{r}", "values": [["","","","",""]]} for _,r,_ in targets],
-                    value_input_option="USER_ENTERED")
-    print("→ 해당 행 J:N 삭제 완료")
-else:
-    print("오염 행 없음")
-# 남은 어정윤 활성 확인
-for h in hdr:
-    s=next((r for r in sog if r>h),None)
-    if not s: continue
-    nm=(vals[h][8] if len(vals[h])>8 else '').replace('\n','')
-    if nm!="어정윤": continue
-    print("\n어정윤 활성(삭제 후 재조회):")
-    for r in range(h+1,s):
-        row=ws.row_values(r)
-        j=row[9] if len(row)>9 else ''
-        k=row[10] if len(row)>10 else ''
-        if j: print(f"  R{r}: {j} ({k})")
+NAME="Roundhill T-REX 2X Long DRAM Daily Target ETF(RAM)"
+cur=ws.row_values(112)
+j=cur[9] if len(cur)>9 else ''
+print(f"복원 전 R112 J열: {j!r}")
+if j.strip():
+    print("이미 값이 있음 — 중단"); raise SystemExit(0)
+ws.batch_update([
+    {"range":"J112","values":[[NAME]]},
+    {"range":"K112","values":[["2026-06-29"]]},
+], value_input_option="USER_ENTERED")
+print("✅ 복원: R112 =", NAME, "/ 2026-06-29 (L·M·N은 데일리가 재계산)")
+# 검증
+for r in (112,113,114,115):
+    row=ws.row_values(r)
+    jj=row[9] if len(row)>9 else ''
+    kk=row[10] if len(row)>10 else ''
+    print(f"  R{r}: {jj!r} ({kk})")
