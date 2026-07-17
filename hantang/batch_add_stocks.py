@@ -1,53 +1,32 @@
-"""[일회성 감사] 2분기 실현 종목 매도가 vs 매도일 종가 대조 — 읽기전용."""
+"""[일회성 진단] 불일치 7건: 매도일 전후 종가 스캔 — 읽기전용."""
 import os, sys, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import update_gsheets as U   # parse_stock / fetch_price / get_spreadsheet 재사용
+import update_gsheets as U
+import yfinance as yf
 
-ss = U.get_spreadsheet()
-TARGET = "한탕(26년 2분기)"
-ws = ss.worksheet(TARGET)
-print("감사 대상:", ws.title)
-vals = ws.get_all_values()
-blocks = U.find_person_blocks(vals)
-
-bad, ok_n, skip = [], 0, []
-for b in blocks:
-    person = b["person"]
-    if not person: continue
-    for r in range(b["row_start"], b["row_end"] + 1):
-        idx = r - 1
-        if idx >= len(vals): continue
-        row = vals[idx]
-        p = row[15] if len(row) > 15 else ""
-        rr = row[17] if len(row) > 17 else ""
-        ss_ = row[18] if len(row) > 18 else ""
-        tt = row[19] if len(row) > 19 else ""
-        if not p or not rr or not tt: continue
-        if "미추천" in p or "패널티" in p:
-            continue
-        try:
-            sell_date = datetime.date.fromisoformat(str(rr).strip()[:10])
-        except Exception:
-            skip.append(f"{person}/{p}: 매도일 파싱불가 {rr!r}"); continue
-        market, code = U.parse_stock(str(p).strip())
-        if not market or not code:
-            skip.append(f"{person}/{p}: 종목코드 미인식"); continue
-        try:
-            rec = float(str(tt).replace(",", ""))
-        except Exception:
-            skip.append(f"{person}/{p}: 매도가 파싱불가 {tt!r}"); continue
-        correct = U.fetch_price(market, code, sell_date)
-        if correct is None:
-            skip.append(f"{person}/{p}: 종가 조회실패 ({sell_date})"); continue
-        diff = abs(correct - rec) / max(rec, 1)
-        if diff >= 0.005:
-            bad.append((person, p, str(sell_date), rec, correct, diff*100, r))
-        else:
-            ok_n += 1
-
-print(f"\n=== 결과: 정상 {ok_n}건 / 불일치 {len(bad)}건 / 확인불가 {len(skip)}건 ===")
-for person, name, sd, rec, cor, d, r in sorted(bad, key=lambda x: -x[5]):
-    print(f"  ❗R{r} {person} / {name} (매도일 {sd}): 기록 {rec:,.2f} vs 종가 {cor:,.2f}  차이 {d:.1f}%")
-if skip:
-    print("\n[확인불가]")
-    for s_ in skip: print("  -", s_)
+CASES=[("조형오","SGC에너지","2026-06-03",50100.0),
+       ("김동환","카르만 홀딩스(KRMN)","2026-05-05",65.32),
+       ("송지호","아이씨티케이","2026-06-03",28900.0),
+       ("이광훈","나노신소재","2026-06-03",62500.0),
+       ("김동환","SK텔레콤","2026-05-12",103400.0),
+       ("김태완","POSCO홀딩스","2026-06-03",399000.0),
+       ("조형오","롯데쇼핑","2026-05-26",158500.0),
+       ("조형오","동성화인텍","2026-05-12",None)]
+for person,name,sd,rec in CASES:
+    d=datetime.date.fromisoformat(sd)
+    market,code=U.parse_stock(name)
+    if not market or not code:
+        print(f"{person}/{name}: 코드 미인식"); continue
+    tick = code + (".KQ" if code in U.KOSDAQ_CODES else ".KS") if market=="KR" else code
+    try:
+        h=yf.Ticker(tick).history(start=str(d-datetime.timedelta(days=6)),
+                                  end=str(d+datetime.timedelta(days=6)), prepost=False)
+    except Exception as e:
+        print(f"{person}/{name}: 조회오류 {e}"); continue
+    print(f"\n[{person} / {name}] 기록매도가={rec} 매도일={sd} ({tick})")
+    for ts,row in h.iterrows():
+        day=ts.date()
+        mark=" ←매도일" if day==d else ""
+        hit=""
+        if rec is not None and abs(float(row['Close'])-rec)/max(rec,1) < 0.005: hit="  ★기록값과 일치"
+        print(f"   {day} 종가 {float(row['Close']):,.2f}{mark}{hit}")
