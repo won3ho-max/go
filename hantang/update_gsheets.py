@@ -812,14 +812,15 @@ def verify_realized_prices(ws: gspread.Worksheet, today: datetime.date):
             if diff < 0.05:
                 continue
 
-            updates.append({"range": f"T{row_1}", "values": [[correct]]})
-            updates.append({"range": f"U{row_1}", "values": [[f"=(T{row_1}-S{row_1})/S{row_1}"]]})
-            fixed.append(f"{person}/{p_name}: {recorded:,.0f} → {correct:,} ({sell_date})")
-            print(f"    [매도가 수정] {person}/{p_name}: {recorded:,.0f} → {correct:,} ({sell_date})")
+            # ⚠️ 자동 덮어쓰기 금지 (보고만).
+            # 실현 기록은 확정된 과거값이다. Yahoo 수정주가는 증자·액면분할 권리락 때
+            # 과거 시세를 소급 조정하므로, 매도가(T)만 새 값으로 덮으면 매수가(S)와
+            # 기준이 어긋나 수익률이 무너진다. (2026-07-16~17 티엘비 무·유상증자 사고)
+            fixed.append(f"{person}/{p_name}: 기록 {recorded:,.0f} vs 조회 {correct:,} ({sell_date}) — 확인 필요")
+            print(f"    [매도가 의심] {person}/{p_name}: 기록 {recorded:,.0f} vs 조회 {correct:,} ({sell_date})")
 
-    if updates:
-        ws.batch_update(updates, value_input_option="USER_ENTERED")
-        print(f"  매도가 검증 수정 완료: {len(fixed)}건")
+    if fixed:
+        print(f"  매도가 검증: 의심 {len(fixed)}건 (자동수정 안 함 — 권리락 소급조정일 수 있음)")
     else:
         print(f"  매도가 검증: 이상 없음")
 
