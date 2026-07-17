@@ -1,32 +1,42 @@
-"""[일회성 진단] 2분기·3분기 활성 종목의 자동매도 예정일 점검 — 읽기전용."""
-import os, sys, datetime
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import update_gsheets as U
-
-today = U.today_kst()
-print("오늘(KST):", today)
-ss = U.get_spreadsheet()
-for title in ["한탕(26년 2분기)", "한탕(26년 3분기)"]:
-    ws = ss.worksheet(title)
-    vals = ws.get_all_values()
-    print(f"\n===== {title} 활성 종목 =====")
-    for b in U.find_person_blocks(vals):
-        person = b["person"]
-        if not person: continue
-        for r in range(b["row_start"], b["row_end"]+1):
-            idx=r-1
-            if idx>=len(vals): continue
-            row=vals[idx]
-            j=row[9] if len(row)>9 else ''
-            k=row[10] if len(row)>10 else ''
-            if not j: continue
-            try:
-                rec=datetime.date.fromisoformat(str(k).strip()[:10])
-            except Exception:
-                print(f"  {person}/{j}: 추천일 파싱불가 {k!r}"); continue
-            market, code = U.parse_stock(str(j).strip())
-            if not market:
-                print(f"  {person}/{j} (추천 {rec}): 코드 미인식 → 자동매도 판정 불가 ❗"); continue
-            sd = U.calc_sell_date(rec, market)
-            overdue = "❗지났음(매도됐어야 함)" if sd < today else ("오늘 도래(내일 처리)" if sd==today else "")
-            print(f"  {person}/{j} (추천 {rec}) → 매도예정 {sd}  {overdue}")
+"""[일회성] 3분기 어정윤 ANET 분석글 쓰레기 행 삭제 (아리스타 네트웍스(ANET)와 중복)."""
+import os, json
+import gspread
+from google.oauth2.service_account import Credentials
+SCOPES=["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+info=json.loads(os.environ["GSHEETS_CREDENTIALS"])
+gc=gspread.authorize(Credentials.from_service_account_info(info,scopes=SCOPES))
+ss=gc.open_by_key(os.environ["GSHEETS_ID"])
+ws=ss.worksheet("한탕(26년 3분기)")
+vals=ws.get_all_values()
+hdr=[i+1 for i,r in enumerate(vals) if (r[9] if len(r)>9 else '')=='종목명']
+sog=[i+1 for i,r in enumerate(vals) if '실현수익률 소계' in str(r[15] if len(r)>15 else '')]
+targets=[]
+for h in hdr:
+    s=next((r for r in sog if r>h),None)
+    if not s: continue
+    nm=(vals[h][8] if len(vals[h])>8 else '').replace('\n','')
+    for r in range(h+1,s):
+        j=vals[r-1][9] if len(vals[r-1])>9 else ''
+        if j and len(j) > 40:      # 정상 종목명은 40자 넘지 않음 → 분석글 오염
+            targets.append((nm,r,j[:45]))
+print("오염(분석글) 행:", len(targets))
+for nm,r,prev in targets:
+    print(f"  {nm} R{r}: {prev}...")
+if targets:
+    ws.batch_update([{"range": f"J{r}:N{r}", "values": [["","","","",""]]} for _,r,_ in targets],
+                    value_input_option="USER_ENTERED")
+    print("→ 해당 행 J:N 삭제 완료")
+else:
+    print("오염 행 없음")
+# 남은 어정윤 활성 확인
+for h in hdr:
+    s=next((r for r in sog if r>h),None)
+    if not s: continue
+    nm=(vals[h][8] if len(vals[h])>8 else '').replace('\n','')
+    if nm!="어정윤": continue
+    print("\n어정윤 활성(삭제 후 재조회):")
+    for r in range(h+1,s):
+        row=ws.row_values(r)
+        j=row[9] if len(row)>9 else ''
+        k=row[10] if len(row)>10 else ''
+        if j: print(f"  R{r}: {j} ({k})")
