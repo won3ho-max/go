@@ -802,8 +802,8 @@ def verify_realized_prices(ws: gspread.Worksheet, today: datetime.date):
             except (ValueError, TypeError):
                 continue
 
-            # Yahoo에서 해당 날짜 종가 조회
-            correct = fetch_price(market, code, sell_date)
+            # Yahoo에서 해당 날짜(휴장이면 직전 거래일) 종가 조회
+            correct = close_on_or_before(market, code, sell_date)
             if correct is None:
                 continue
 
@@ -831,6 +831,29 @@ def today_kst():
     """KST(UTC+9) 기준 오늘 날짜"""
     from datetime import timezone, timedelta
     return datetime.datetime.now(timezone(timedelta(hours=9))).date()
+
+def close_on_or_before(market: str, code: str, date: datetime.date):
+    """매도일 종가. 그날이 휴장이면 '직전 거래일' 종가를 쓴다(관례).
+    fetch_price(date)는 다음 거래일 종가를 집어오므로 매도가 확정엔 이 함수를 쓸 것."""
+    try:
+        if market == "KR":
+            suffix = ".KQ" if code in KOSDAQ_CODES else ".KS"
+            ticker_str = code + suffix
+        else:
+            ticker_str = code
+        hist = yf.Ticker(ticker_str).history(
+            start=str(date - datetime.timedelta(days=10)),
+            end=str(date + datetime.timedelta(days=1)), prepost=False)
+        hist = hist["Close"].dropna()
+        if hist.empty:
+            return None
+        price = float(hist.iloc[-1])   # 매도일 이하 마지막 종가
+        if math.isnan(price) or math.isinf(price):
+            return None
+        return round(price, 2) if market == "US" else round(price)
+    except Exception:
+        return None
+
 
 def fix_pending_sells(ss, today: datetime.date):
     """리스너가 자동매도한 행(_pending_sell)의 매도가(T)를 매도일 종가로 확정한다.
@@ -863,7 +886,7 @@ def fix_pending_sells(ss, today: datetime.date):
         market, code = parse_stock(str(name).strip())
         if not market or not code:
             continue
-        correct = fetch_price(market, code, sell_date)
+        correct = close_on_or_before(market, code, sell_date)
         if correct is None:
             keep.append(r)          # 조회 실패 → 다음 실행에 재시도
             continue
