@@ -951,6 +951,8 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                 qq = row[16] if len(row) > 16 else ""
                 if j and Ds in str(k):
                     recommended = True
+                if pp and Ds in str(qq) and not is_pen(pp):
+                    recommended = True          # 실현(매도)된 종목도 그날 추천한 것
                 if pp and Ds in str(qq) and is_pen(pp):
                     has_penalty = True
                 if (not pp or not str(pp).strip()) and empty_p is None:
