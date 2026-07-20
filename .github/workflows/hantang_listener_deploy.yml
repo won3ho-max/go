@@ -34,7 +34,7 @@ jobs:
       - name: Bootstrap and restart listener
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 \
-            "TOKEN='${{ secrets.HANTANG_TELEGRAM_TOKEN }}' SHEETID='${{ secrets.GSHEETS_ID }}' CREDS_B64='${{ steps.prep.outputs.CREDS_B64 }}' bash -s" << 'ENDSSH'
+            "TOKEN='${{ secrets.HANTANG_TELEGRAM_TOKEN }}' SHEETID='${{ secrets.GSHEETS_ID }}' CREDS_B64='${{ steps.prep.outputs.CREDS_B64 }}' ANTKEY='${{ secrets.ANTHROPIC_API_KEY }}' bash -s" << 'ENDSSH'
           set -e
           DIR=/home/won3ho/hantang_listener
           mkdir -p "$DIR"
@@ -54,6 +54,7 @@ jobs:
           Environment=TELEGRAM_TOKEN=$TOKEN
           Environment=GSHEETS_ID=$SHEETID
           Environment=ADMIN_CHAT_ID=1633958343
+          Environment=ANTHROPIC_API_KEY=$ANTKEY
           ExecStart=/usr/bin/python3 $DIR/telegram_listener_realtime.py
           Restart=on-failure
           RestartSec=10

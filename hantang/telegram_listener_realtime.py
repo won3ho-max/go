@@ -322,10 +322,12 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s\(\)\[\]{}]", "", s or "").upper()
 
 
-def _naver_lookup(cand: str):
-    """네이버 금융 검색으로 후보가 '정확히 일치'하는 종목이면 정식명 반환(오탐 방지)."""
-    if cand in _stock_cache:
-        return _stock_cache[cand]
+def _naver_lookup(cand: str, allow_ticker: bool = False):
+    """네이버 금융 검색으로 후보가 '정확히 일치'하는 종목이면 정식명 반환(오탐 방지).
+    allow_ticker=True면 티커코드 일치도 허용(LLM이 이미 종목을 특정한 경우에만 사용)."""
+    key = (cand, allow_ticker)
+    if key in _stock_cache:
+        return _stock_cache[key]
     res = None
     try:
         r = requests.get("https://ac.stock.naver.com/ac",
@@ -335,27 +337,67 @@ def _naver_lookup(cand: str):
         cn = _norm(cand)
         for pref in ("KR", "US"):
             for it in items:
-                nm = it.get("name", ""); tc = it.get("typeCode", "")
+                nm = it.get("name", ""); code = it.get("code", ""); tc = it.get("typeCode", "")
                 is_kr = tc in ("KOSPI", "KOSDAQ")
                 if pref == "KR" and not is_kr:
                     continue
                 if pref == "US" and is_kr:
                     continue
-                if nm and _norm(nm) == cn:
+                exact = nm and _norm(nm) == cn
+                tick = allow_ticker and code and code.upper() == cand.strip().upper()
+                if nm and (exact or tick):
                     res = nm; break
             if res:
                 break
     except Exception as e:
         log(f"[종목조회 실패] {cand}: {e}")
-    _stock_cache[cand] = res
+    _stock_cache[key] = res
     return res
 
 
+def resolve_stock_llm(text: str):
+    """클로드로 메시지 전체에서 종목명/티커 1개를 추출. 실패/불가 시 None."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key or not text:
+        return None
+    prompt = (
+        "다음은 주식 스터디 단톡방의 '매수 추천' 메시지야. 추천한 종목 1개만 골라내.\n"
+        "- 한국 종목이면 정식 종목명(한글)\n"
+        "- 미국 종목이면 티커(대문자 영문)\n"
+        "- 종목을 특정할 수 없으면 정확히 NONE\n"
+        "설명·이유·수식어 없이 종목명 또는 티커만 한 줄로 출력해.\n\n"
+        "메시지:\n" + text[:1500]
+    )
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 40,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=25).json()
+        ans = (r.get("content", [{}])[0].get("text", "") or "").strip()
+        ans = ans.splitlines()[0].strip().strip("\"'`").strip() if ans else ""
+        if not ans or ans.upper() == "NONE":
+            return None
+        return ans
+    except Exception as e:
+        log(f"[LLM추출 실패] {e}")
+        return None
+
+
 def resolve_stock(text: str):
-    """메시지 앞 5줄을 훑어 각 줄 앞 토큰(노이즈 제거)을 길->짧게 네이버에 대조.
-    종목명이 태그와 다른 줄에 있어도 인식. 정확 일치가 없으면 None(→ 알림)."""
+    """종목명 확정. ① 클로드 추출→네이버 검증(티커 허용) ② 실패 시 앞 5줄 토큰 정확일치.
+    둘 다 실패하면 None(→ 자동기록 안 하고 알림)."""
     if not text:
         return None
+    # ① LLM 추출 → 네이버 검증(티커 허용). LLM이 이미 종목을 특정했으므로 티커매칭 안전.
+    ans = resolve_stock_llm(text)
+    if ans:
+        off = _naver_lookup(ans, allow_ticker=True)
+        if off:
+            return off
+    # ② 휴리스틱 폴백: 앞 5줄에서 앞 토큰 정확일치(티커매칭 금지 — 오탐 방지)
     t = text.replace("#", " ")
     for line in t.split("\n")[:5]:
         line = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", line)
