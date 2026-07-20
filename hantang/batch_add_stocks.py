@@ -1,61 +1,113 @@
-"""[일회성 드라이런] 미추천 패널티 자동화 시뮬레이션 — 읽기전용(쓰기 없음)."""
-import os, sys, datetime
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import update_gsheets as U
+"""
+GitHub Actions용 종목 일괄 추가 스크립트
+─────────────────────────────────────────
+텔레그램 없이 직접 Google Sheets에 종목을 추가한다.
 
-MEMBERS=["안병열","김동환","이광훈","송지호","조형오","어정윤","이원호","김태완"]
-today=U.today_kst()
-print("today_kst:",today,"(요일:",today.strftime("%a"),")")
-ss=U.get_spreadsheet()
-ws=[w for w in ss.worksheets() if not w.title.startswith("_")][-1]
-print("대상:",ws.title)
-vals=ws.get_all_values()
-blocks=U.find_person_blocks(vals)
-def block(name):
-    return next((b for b in blocks if b["person"]==name or name in b["person"]),None)
+환경변수:
+  GSHEETS_CREDENTIALS  - 서비스 계정 JSON 문자열
+  GSHEETS_ID           - 스프레드시트 ID
+  STOCKS               - "이름:종목명,이름:종목명,..." 형식
+  REC_DATE             - 추천일 (YYYY-MM-DD), 미입력 시 이번 주 월요일
+"""
 
-# 라운드 날짜 = 시트에 존재하는 '월요일' 추천일(활성 K + 실현 Q, 패널티 제외)
-round_days=set()
-def is_pen(p): return "미추천" in str(p) or "패널티" in str(p)
-for b in blocks:
-    for r in range(b["row_start"],b["row_end"]+1):
-        row=vals[r-1]
-        k=row[10] if len(row)>10 else ''
-        p=row[15] if len(row)>15 else ''
-        q=row[16] if len(row)>16 else ''
-        j=row[9] if len(row)>9 else ''
-        for d in [k if j else '', (q if (p and not is_pen(p)) else '')]:
-            try:
-                dd=datetime.date.fromisoformat(str(d).strip()[:10])
-                if dd.weekday()==0 and dd<=today:   # 월요일, 오늘 이하
-                    round_days.add(dd)
-            except Exception: pass
-print("감지된 라운드(월):", sorted(str(d) for d in round_days))
+import os, sys, json, datetime
 
-def recommended(name, D):
-    b=block(name)
-    if not b: return False
-    for r in range(b["row_start"],b["row_end"]+1):
-        row=vals[r-1]
-        j=row[9] if len(row)>9 else ''; k=row[10] if len(row)>10 else ''
-        p=row[15] if len(row)>15 else ''; q=row[16] if len(row)>16 else ''
-        if j and str(D) in str(k): return True
-        if p and (not is_pen(p)) and str(D) in str(q): return True
-    return False
-def has_pen(name, D):
-    b=block(name)
-    for r in range(b["row_start"],b["row_end"]+1):
-        row=vals[r-1]
-        p=row[15] if len(row)>15 else ''; q=row[16] if len(row)>16 else ''
-        if p and is_pen(p) and str(D) in str(q): return True
-    return False
+import gspread
+from google.oauth2.service_account import Credentials
 
-for D in sorted(round_days):
-    recs=[m for m in MEMBERS if recommended(m,D)]
-    miss=[m for m in MEMBERS if not recommended(m,D)]
-    new_pen=[m for m in miss if not has_pen(m,D)]
-    already=[m for m in miss if has_pen(m,D)]
-    print(f"\n[{D}] 추천 {len(recs)}명")
-    print(f"   미추천: {miss}")
-    print(f"   이미 패널티: {already}")
-    print(f"   → 새로 넣을 패널티: {new_pen}")
+SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+def get_worksheet():
+    info = json.loads(os.environ["GSHEETS_CREDENTIALS"])
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    gc = gspread.authorize(creds)
+    ss = gc.open_by_key(os.environ["GSHEETS_ID"])
+    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    return sheets[-1]
+
+
+def find_person_blocks(all_values):
+    header_rows, sogyae_rows = [], []
+    for i, row in enumerate(all_values):
+        j = row[9] if len(row) > 9 else ""
+        p = row[15] if len(row) > 15 else ""
+        if j == "종목명":
+            header_rows.append(i + 1)
+        if "실현수익률 소계" in str(p):
+            sogyae_rows.append(i + 1)
+
+    blocks = []
+    for h_row in header_rows:
+        s_row = next((r for r in sogyae_rows if r > h_row), None)
+        if not s_row:
+            continue
+        i_val = all_values[h_row][8] if len(all_values[h_row]) > 8 else ""
+        person = str(i_val).strip().replace("\n", "") if i_val else ""
+        blocks.append({"person": person, "row_start": h_row + 1, "row_end": s_row - 1})
+    return blocks
+
+
+def add_stock(ws, all_values, person_name, stock_name, rec_date):
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    # 중복 체크 없음 — 재추천 시 새 행으로 추가
+
+    empty_row = next(
+        (r for r in range(block["row_start"], block["row_end"] + 1)
+         if r - 1 < len(all_values)
+         and not (all_values[r - 1][9] if len(all_values[r - 1]) > 9 else "")),
+        None,
+    )
+    if not empty_row:
+        return False, f"'{person_name}' 블록에 빈 행 없음"
+
+    cell_j = gspread.Cell(row=empty_row, col=10, value=stock_name)
+    cell_k = gspread.Cell(row=empty_row, col=11, value=str(rec_date))
+    ws.update_cells([cell_j, cell_k], value_input_option="USER_ENTERED")
+    return True, f"{person_name} / {stock_name} 추가 완료"
+
+
+def get_rec_date(date_str=None):
+    """명시적 날짜가 있으면 그대로 사용, 없으면 이번 주 월요일"""
+    if date_str:
+        return datetime.date.fromisoformat(date_str)
+    d = datetime.date.today()
+    return d - datetime.timedelta(days=d.weekday())
+
+
+def run():
+    stocks_raw = os.environ.get("STOCKS", "")
+    rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
+
+    if not stocks_raw:
+        print("[오류] STOCKS 환경변수 미설정")
+        sys.exit(1)
+
+    pairs = [s.strip().split(":") for s in stocks_raw.split(",") if ":" in s]
+    print(f"추천일: {rec_date}")
+    print(f"입력 종목: {len(pairs)}건\n")
+
+    ws = get_worksheet()
+    all_vals = ws.get_all_values()
+
+    for person, stock in pairs:
+        ok, msg = add_stock(ws, all_vals, person.strip(), stock.strip(), rec_date)
+        print(f"  {'✅' if ok else '❌'} {msg}")
+        if ok:
+            all_vals = ws.get_all_values()
+
+    print(f"\n처리 완료")
+
+
+if __name__ == "__main__":
+    run()

@@ -902,6 +902,74 @@ def fix_pending_sells(ss, today: datetime.date):
     return fixed
 
 
+def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime.date):
+    """당일(월요일 라운드) 미추천자에게 -10% 패널티 자동 부여.
+    규칙: 시트에 존재하는 '월요일' 추천일 중 D<today 인 라운드마다,
+          그날 활성/실현 추천이 없는 멤버에게 실현섹션에 -10%(S=100,T=90) 기록.
+          이미 그 날짜의 미추천 패널티가 있으면 건너뜀(중복 방지)."""
+    def is_pen(p): return "미추천" in str(p) or "패널티" in str(p)
+
+    vals = ws.get_all_values()
+    blocks = find_person_blocks(vals)
+
+    # 라운드 = 데이터에 존재하는 '월요일' 추천일(패널티 제외), 오늘보다 이전
+    round_days = set()
+    for b in blocks:
+        for r in range(b["row_start"], b["row_end"] + 1):
+            row = vals[r - 1]
+            j = row[9]  if len(row) > 9  else ""
+            k = row[10] if len(row) > 10 else ""
+            pp = row[15] if len(row) > 15 else ""
+            qq = row[16] if len(row) > 16 else ""
+            for d, ok in [(k, bool(j)), (qq, bool(pp) and not is_pen(pp))]:
+                if not ok:
+                    continue
+                try:
+                    dd = datetime.date.fromisoformat(str(d).strip()[:10])
+                    if dd.weekday() == 0 and dd < today:
+                        round_days.add(dd)
+                except Exception:
+                    pass
+
+    applied = []
+    for D in sorted(round_days):
+        Ds = str(D)
+        for b in blocks:
+            person = b["person"]
+            if not person:
+                continue
+            recommended = has_penalty = False
+            empty_p = None
+            vals = ws.get_all_values()   # 매 멤버 최신 상태 (앞서 쓴 패널티 반영)
+            for r in range(b["row_start"], b["row_end"] + 1):
+                if r - 1 >= len(vals):
+                    break
+                row = vals[r - 1]
+                j = row[9]  if len(row) > 9  else ""
+                k = row[10] if len(row) > 10 else ""
+                pp = row[15] if len(row) > 15 else ""
+                qq = row[16] if len(row) > 16 else ""
+                if j and Ds in str(k):
+                    recommended = True
+                if pp and Ds in str(qq) and is_pen(pp):
+                    has_penalty = True
+                if (not pp or not str(pp).strip()) and empty_p is None:
+                    empty_p = r
+            if recommended or has_penalty or empty_p is None:
+                continue
+            pr = empty_p
+            ws.batch_update([
+                {"range": f"P{pr}", "values": [["미추천(패널티)"]]},
+                {"range": f"Q{pr}", "values": [[Ds]]},
+                {"range": f"R{pr}", "values": [[Ds]]},
+                {"range": f"S{pr}", "values": [[100]]},
+                {"range": f"T{pr}", "values": [[90]]},
+                {"range": f"U{pr}", "values": [[f"=(T{pr}-S{pr})/S{pr}"]]},
+            ], value_input_option="USER_ENTERED")
+            applied.append(f"{person} {Ds} 미추천 -10% (실현 R{pr})")
+    return applied
+
+
 def has_active_positions(ws: gspread.Worksheet) -> bool:
     """활성(미매도) 종목이 J열에 하나라도 있으면 True."""
     vals = ws.get_all_values()
@@ -959,6 +1027,10 @@ def main():
 
     # 현재 분기 처리
     process_quarter(current, today, is_current=True)
+
+    # 당일 미추천자 -10% 패널티 자동 부여 (월요일 라운드)
+    for f in (apply_missed_recommendation_penalties(current, today) or []):
+        print(f"  · [미추천패널티] {f}")
 
     # 직전 분기(예: 2분기)만, 활성 종목이 남아있는 동안 갱신 (모두 매도되면 자동 제외)
     if len(sheets) >= 2:
