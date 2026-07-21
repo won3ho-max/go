@@ -181,13 +181,11 @@ def _fetch_yahoo_index(symbol: str, name: str, tag: str) -> dict | None:
 def fetch_market_data() -> list:
     """KOSPI/KOSDAQ(네이버) + 미국/일본/중국/홍콩/환율(Yahoo) 조회"""
     results = []
-    # 한국 지수: 네이버 (정확도 높음)
-    for code, name, tag in [("KOSPI", "KOSPI", "전일"), ("KOSDAQ", "KOSDAQ", "전일")]:
-        r = _fetch_naver_index(code, name, tag)
-        if r:
-            results.append(r)
-    # 해외 지수 + 환율: Yahoo Finance
+    # 국내 지수도 해외와 동일하게 '직전 완료 세션(전일) 종가 대비'로 계산
+    # (데일리는 개장 전 7시에 실행 → 네이버 장중 등락률은 0.00%로 나오는 문제 방지)
     yahoo_indices = [
+        ("^KS11",    "KOSPI",    "전일"),
+        ("^KQ11",    "KOSDAQ",   "전일"),
         ("^GSPC",    "S&P 500",  ""),
         ("^IXIC",    "NASDAQ",   ""),
         ("^N225",    "닛케이225", ""),
