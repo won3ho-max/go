@@ -215,13 +215,22 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache):
     if not block:
         return False, f"'{person_name}' 블록을 찾을 수 없음"
 
+    # 매칭: ① 티커 일치 우선 ② 괄호 제외 이름 정규화 비교(표기 흔들림 흡수)
+    t_code, t_base = _split_stock_label(stock_name)
     stock_row = None
     for r in range(block["row_start"], block["row_end"] + 1):
         idx = r - 1
         if idx >= len(all_values):
             continue
         j = all_values[idx][9] if len(all_values[idx]) > 9 else ""
-        if j and (stock_name in str(j) or str(j).strip() in stock_name):
+        if not j:
+            continue
+        j_code, j_base = _split_stock_label(str(j))
+        if t_code and j_code and t_code == j_code:
+            stock_row = r
+            break
+        if (len(t_base) >= 2 and len(j_base) >= 2
+                and (t_base == j_base or t_base in j_base or j_base in t_base)):
             stock_row = r
             break
     if stock_row is None:
@@ -319,53 +328,105 @@ _stock_cache = {}
 
 
 def _norm(s: str) -> str:
-    return re.sub(r"[\s\(\)\[\]{}]", "", s or "").upper()
+    return re.sub(r"[\s\(\)\[\]{}·\-_/\.]", "", s or "").upper()
 
 
-def _naver_lookup(cand: str, allow_ticker: bool = False):
-    """네이버 금융 검색으로 후보가 '정확히 일치'하는 종목이면 정식명 반환(오탐 방지).
-    allow_ticker=True면 티커코드 일치도 허용(LLM이 이미 종목을 특정한 경우에만 사용)."""
-    key = (cand, allow_ticker)
-    if key in _stock_cache:
-        return _stock_cache[key]
-    res = None
+def _split_stock_label(label: str):
+    """'코히런트(COHR)' → ('COHR', '코히런트'). 괄호 티커가 없으면 코드는 ''."""
+    s = str(label or "").strip()
+    m = re.search(r"\(([A-Za-z0-9]{1,7})\)\s*$", s)
+    code = m.group(1).upper() if m else ""
+    base = _norm(re.sub(r"\([^)]*\)\s*$", "", s))
+    return code, base
+
+
+# 원문에 거래소와 함께 명시된 티커 (예: NYSE: COHR, NASDAQ:NVDA, 나스닥 TSLA)
+_EXCH_TICKER_RE = re.compile(
+    r"(?:NYSE\s*American|NYSE|NASDAQ|AMEX|ARCA|CBOE|나스닥|뉴욕증권거래소|뉴욕거래소)"
+    r"\s*[:：]?\s*([A-Z]{1,5})\b")
+# 괄호 안 단독 티커 (예: (COHR))
+_PAREN_TICKER_RE = re.compile(r"\(\s*([A-Z]{2,5})\s*\)")
+
+
+def _naver_items(query: str):
+    """네이버 자동완성 원본 items 반환. 조회 자체 실패면 None(빈 결과 []와 구분)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    if q in _stock_cache:
+        return _stock_cache[q]
     try:
         r = requests.get("https://ac.stock.naver.com/ac",
-                         params={"q": cand, "target": "stock"},
+                         params={"q": q, "target": "stock"},
                          headers={"User-Agent": "Mozilla/5.0"}, timeout=6).json()
-        items = r.get("items", [])
-        cn = _norm(cand)
-        for pref in ("KR", "US"):
-            for it in items:
-                nm = it.get("name", ""); code = it.get("code", ""); tc = it.get("typeCode", "")
-                is_kr = tc in ("KOSPI", "KOSDAQ")
-                if pref == "KR" and not is_kr:
-                    continue
-                if pref == "US" and is_kr:
-                    continue
-                exact = nm and _norm(nm) == cn
-                tick = allow_ticker and code and code.upper() == cand.strip().upper()
-                if nm and (exact or tick):
-                    res = nm; break
-            if res:
-                break
+        items = r.get("items", []) or []
     except Exception as e:
-        log(f"[종목조회 실패] {cand}: {e}")
-    _stock_cache[key] = res
-    return res
+        log(f"[종목조회 오류] {q}: {e}")
+        return None
+    _stock_cache[q] = items
+    return items
+
+
+def _pick(items, code: str = "", name: str = ""):
+    """items에서 조건에 맞는 종목을 (정식명, 코드, KR여부)로 반환. 국내 우선.
+    code 지정 시 티커 완전일치, name 지정 시 공백무시 완전일치/부분포함."""
+    kr = us = None
+    for it in items or []:
+        nm = (it.get("name") or "").strip()
+        cd = (it.get("code") or "").strip()
+        if not nm or not cd:
+            continue
+        tc = it.get("typeCode", "")
+        nation = it.get("nationCode", "")
+        is_kr = tc in ("KOSPI", "KOSDAQ")
+        if code:
+            if cd.upper() != code.strip().upper():
+                continue
+        elif name:
+            a, b = _norm(name), _norm(nm)
+            if not (a and b and (a == b or a in b or b in a)):
+                continue
+        if is_kr:
+            kr = kr or (nm, cd, True)
+        elif nation in ("USA", ""):
+            us = us or (nm, cd, False)
+    return kr or us
+
+
+def _fmt_stock(res) -> str:
+    """시트 표기 규칙: 국내는 정식명, 해외는 '정식명(티커)' (update_gsheets와 동일)."""
+    nm, cd, is_kr = res
+    return nm if is_kr else f"{nm}({cd})"
+
+
+def _heuristic_names(text: str):
+    """앞 5줄에서 종목명 후보 토큰열 생성(기존 폴백 로직)."""
+    out = []
+    t = (text or "").replace("#", " ")
+    for line in t.split("\n")[:5]:
+        line = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", line)
+        toks = [w for w in line.split() if w]
+        while toks and (toks[0] in _LEAD_NOISE or re.fullmatch(r"\d+[.)]?", toks[0])):
+            toks.pop(0)
+        for n in range(min(4, len(toks)), 0, -1):
+            out.append(" ".join(toks[:n]))
+    return out
 
 
 def resolve_stock_llm(text: str):
-    """클로드로 메시지 전체에서 종목명/티커 1개를 추출. 실패/불가 시 None."""
+    """클로드로 종목 1개 추출.
+    반환: {'name_ko','name_en','ticker','market'} / {}(특정 불가) / None(호출 실패)"""
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key or not text:
         return None
     prompt = (
-        "다음은 주식 스터디 단톡방의 '매수 추천' 메시지야. 추천한 종목 1개만 골라내.\n"
-        "- 한국 종목이면 정식 종목명(한글)\n"
-        "- 미국 종목이면 티커(대문자 영문)\n"
-        "- 종목을 특정할 수 없으면 정확히 NONE\n"
-        "설명·이유·수식어 없이 종목명 또는 티커만 한 줄로 출력해.\n\n"
+        "다음은 주식 스터디 단톡방의 종목 추천/매도 메시지다. 언급된 대상 종목 1개를 식별해 "
+        "JSON 한 줄만 출력해라.\n"
+        '형식: {"name_ko":"한글 종목명","name_en":"영문 정식명","ticker":"티커","market":"KR 또는 US"}\n'
+        "- 아는 값은 최대한 채운다. 특히 ticker는 아는 경우 반드시 채운다(미국=대문자 영문, 한국=6자리 숫자).\n"
+        "- 모르는 항목은 빈 문자열.\n"
+        '- 종목을 특정할 수 없으면 {"none":true} 만 출력.\n'
+        "- 설명·코드블록 없이 JSON만.\n\n"
         "메시지:\n" + text[:1500]
     )
     try:
@@ -373,44 +434,81 @@ def resolve_stock_llm(text: str):
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 40,
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200,
                   "messages": [{"role": "user", "content": prompt}]},
             timeout=25).json()
         ans = (r.get("content", [{}])[0].get("text", "") or "").strip()
-        ans = ans.splitlines()[0].strip().strip("\"'`").strip() if ans else ""
-        if not ans or ans.upper() == "NONE":
+        m = re.search(r"\{.*\}", ans, re.S)
+        if not m:
             return None
-        return ans
+        data = json.loads(m.group(0))
+        if not isinstance(data, dict) or data.get("none"):
+            return {}
+        return {k: str(data.get(k) or "").strip()
+                for k in ("name_ko", "name_en", "ticker", "market")}
     except Exception as e:
         log(f"[LLM추출 실패] {e}")
         return None
 
 
 def resolve_stock(text: str):
-    """종목명 확정. ① 클로드 추출→네이버 검증(티커 허용) ② 실패 시 앞 5줄 토큰 정확일치.
-    둘 다 실패하면 None(→ 자동기록 안 하고 알림)."""
+    """종목 확정. 반환: (시트표기 문자열 or None, 판정근거 문자열)
+
+    후보 우선순위 — ① 원문에 거래소와 함께 적힌 티커 ② LLM 티커 ③ LLM 종목명(한/영)
+    ④ 원문 괄호 티커 ⑤ 앞 5줄 토큰. 모든 후보는 네이버 조회로 검증하며,
+    검증 실패 시 자동기록을 포기(fail-closed)한다.
+    """
     if not text:
-        return None
-    # ① LLM 추출 → 네이버 검증(티커 허용). LLM이 이미 종목을 특정했으므로 티커매칭 안전.
-    ans = resolve_stock_llm(text)
-    if ans:
-        off = _naver_lookup(ans, allow_ticker=True)
-        if off:
-            return off
-    # ② 휴리스틱 폴백: 앞 5줄에서 앞 토큰 정확일치(티커매칭 금지 — 오탐 방지)
-    t = text.replace("#", " ")
-    for line in t.split("\n")[:5]:
-        line = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", line)
-        toks = [w for w in line.split() if w]
-        while toks and (toks[0] in _LEAD_NOISE or re.fullmatch(r"\d+[.)]?", toks[0])):
-            toks.pop(0)
-        if not toks:
+        return None, "빈 메시지"
+
+    cands, notes = [], []
+
+    exch = sorted({m.group(1).upper() for m in _EXCH_TICKER_RE.finditer(text)})
+    if len(exch) == 1:
+        cands.append(("code", exch[0], "원문 거래소표기"))
+    elif len(exch) > 1:
+        notes.append(f"원문 티커 후보 다수({','.join(exch)}) → 미사용")
+
+    info = resolve_stock_llm(text)
+    if info is None:
+        notes.append("LLM 추출 실패/키 미설정")
+    elif not info:
+        notes.append("LLM 판단: 종목 특정 불가")
+    else:
+        if info.get("ticker"):
+            cands.append(("code", info["ticker"].upper(), "LLM 티커"))
+        for k in ("name_ko", "name_en"):
+            if info.get(k):
+                cands.append(("name", info[k], f"LLM {k}"))
+
+    paren = sorted({m.group(1).upper() for m in _PAREN_TICKER_RE.finditer(text)})
+    if len(paren) == 1 and not exch:
+        cands.append(("code", paren[0], "원문 괄호 티커"))
+
+    for nm in _heuristic_names(text):
+        cands.append(("name", nm, "원문 토큰"))
+
+    seen = set()
+    for kind, val, why in cands:
+        key = (kind, val.upper())
+        if key in seen:
             continue
-        for n in range(min(5, len(toks)), 0, -1):
-            official = _naver_lookup(" ".join(toks[:n]))
-            if official:
-                return official
-    return None
+        seen.add(key)
+        items = _naver_items(val)
+        if items is None:
+            notes.append(f"{why}('{val}') 네이버 조회 오류")
+            continue
+        res = _pick(items, code=val if kind == "code" else "",
+                    name="" if kind == "code" else val)
+        # 이름 매칭은 실패했지만 검색결과가 1건뿐이면 단독 채택(update_gsheets와 동일 규칙)
+        if not res and kind == "name" and len(items) == 1:
+            res = _pick(items)
+        if res:
+            return _fmt_stock(res), f"{why} '{val}' → 네이버 {res[0]}({res[1]})"
+        if kind == "code" or why.startswith("LLM"):
+            notes.append(f"{why}('{val}') 네이버 미검증")
+
+    return None, "; ".join(notes[:4]) or "후보 없음"
 
 
 def today_kst():
@@ -475,18 +573,19 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"※ 멤버 매핑 안 됨 → 자동기록 안 함")
             log(f"[매수-미매핑] id={sid}")
             return
-        stock = resolve_stock(text)
+        stock, why = resolve_stock(text)
         if not stock:
             notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
-                         f"※ 종목명 자동인식 실패 → 자동기록 안 함(수동 확정 필요)")
-            log(f"[매수-미인식] {member}")
+                         f"※ 종목명 자동인식 실패 → 자동기록 안 함(수동 확정 필요)\n"
+                         f"사유: {why}")
+            log(f"[매수-미인식] {member}: {why}")
             return
         ws, values = cache.ensure()
         ok, result = add_stock(ws, values, member, stock, today_kst())
         if ok:
             cache.refresh()
         icon = "✅" if ok else "❌"
-        notify_admin(f"{icon} 매수 자동기록 — {member} / {stock}\n원문: {body}\n{result}")
+        notify_admin(f"{icon} 매수 자동기록 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
         log(f"[매수-{'기록' if ok else '실패'}] {member}/{stock}: {result}")
     else:  # sell
         if not member:
@@ -494,18 +593,19 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"※ 멤버 매핑 안 됨 → 자동처리 안 함")
             log(f"[매도-미매핑] id={sid}")
             return
-        stock = resolve_stock(text)
+        stock, why = resolve_stock(text)
         if not stock:
             notify_admin(f"🔴 매도 감지 — {member}\n원문: {body}\n"
-                         f"※ 종목명 자동인식 실패 → 자동처리 안 함(수동 확정 필요)")
-            log(f"[매도-미인식] {member}")
+                         f"※ 종목명 자동인식 실패 → 자동처리 안 함(수동 확정 필요)\n"
+                         f"사유: {why}")
+            log(f"[매도-미인식] {member}: {why}")
             return
         ws, values = cache.ensure()
         ok, result = sell_stock(ws, values, member, stock, today_kst(), cache)
         if ok:
             cache.refresh()
         icon = "✅" if ok else "❌"
-        notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}")
+        notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
         log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result}")
 
 

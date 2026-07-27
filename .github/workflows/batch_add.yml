@@ -11,6 +11,16 @@ on:
         description: '추천일 (YYYY-MM-DD, 비우면 이번주 월요일)'
         required: false
         type: string
+      dry_run:
+        description: '드라이런(읽기전용 확인만, 시트 변경 없음)'
+        required: false
+        default: true
+        type: boolean
+      allow_dup:
+        description: '같은 종목이 이미 있어도 추가(재추천인 경우만 true)'
+        required: false
+        default: false
+        type: boolean
 
 defaults:
   run:
@@ -35,4 +45,6 @@ jobs:
           GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
           STOCKS:              ${{ inputs.stocks }}
           REC_DATE:            ${{ inputs.rec_date }}
+          DRY_RUN:             ${{ inputs.dry_run }}
+          ALLOW_DUP:           ${{ inputs.allow_dup }}
         run: python batch_add_stocks.py

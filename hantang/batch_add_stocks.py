@@ -10,7 +10,7 @@ GitHub Actions용 종목 일괄 추가 스크립트
   REC_DATE             - 추천일 (YYYY-MM-DD), 미입력 시 이번 주 월요일
 """
 
-import os, sys, json, datetime
+import os, re, sys, json, datetime
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -51,7 +51,61 @@ def find_person_blocks(all_values):
     return blocks
 
 
-def add_stock(ws, all_values, person_name, stock_name, rec_date):
+def _split_label(label):
+    """'코히런트(COHR)' → ('COHR', '코히런트'). 표기 흔들림을 흡수한 비교용."""
+    s = str(label or "").strip()
+    m = re.search(r"\(([A-Za-z0-9]{1,7})\)\s*$", s)
+    code = m.group(1).upper() if m else ""
+    base = re.sub(r"[\s\(\)\[\]{}·\-_/\.]", "",
+                  re.sub(r"\([^)]*\)\s*$", "", s)).upper()
+    return code, base
+
+
+def _same_stock(a, b):
+    ac, ab = _split_label(a)
+    bc, bb = _split_label(b)
+    if ac and bc:
+        return ac == bc
+    return bool(ab) and bool(bb) and (ab == bb or ab in bb or bb in ab)
+
+
+def find_existing(all_values, block, stock_name):
+    """해당 블록의 활성(J)·실현(P)에 같은 종목이 이미 있으면 위치 목록 반환."""
+    hits = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        j = row[9] if len(row) > 9 else ""
+        p = row[15] if len(row) > 15 else ""
+        k = row[10] if len(row) > 10 else ""
+        q = row[16] if len(row) > 16 else ""
+        if j and _same_stock(j, stock_name):
+            hits.append(f"활성 J{r}='{j}' (추천일 {k})")
+        if p and _same_stock(p, stock_name):
+            hits.append(f"실현 P{r}='{p}' (추천일 {q})")
+    return hits
+
+
+def describe_block(all_values, block):
+    """드라이런: 해당 멤버 블록의 현재 활성/실현 상태를 그대로 출력."""
+    print(f"    [현재 상태] {block['person']} (행 {block['row_start']}~{block['row_end']})")
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        j = row[9] if len(row) > 9 else ""
+        k = row[10] if len(row) > 10 else ""
+        p = row[15] if len(row) > 15 else ""
+        q = row[16] if len(row) > 16 else ""
+        if j or p:
+            print(f"      행{r:>3} | 활성 J='{j}' K='{k}' | 실현 P='{p}' Q='{q}'")
+
+
+def add_stock(ws, all_values, person_name, stock_name, rec_date,
+              dry_run=False, allow_dup=False):
     blocks = find_person_blocks(all_values)
     block = next(
         (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
@@ -60,7 +114,15 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date):
     if not block:
         return False, f"'{person_name}' 블록을 찾을 수 없음"
 
-    # 중복 체크 없음 — 재추천 시 새 행으로 추가
+    if dry_run:
+        describe_block(all_values, block)
+
+    dups = find_existing(all_values, block, stock_name)
+    if dups:
+        msg = f"'{person_name}'에 '{stock_name}' 기존 기록 있음 → " + " / ".join(dups)
+        if not allow_dup:
+            return False, msg + "  ※ 중복 방지로 추가 안 함(재추천이면 allow_dup=true)"
+        print(f"    [경고] {msg}  ※ allow_dup=true → 그대로 추가")
 
     empty_row = next(
         (r for r in range(block["row_start"], block["row_end"] + 1)
@@ -71,10 +133,14 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date):
     if not empty_row:
         return False, f"'{person_name}' 블록에 빈 행 없음"
 
+    if dry_run:
+        return True, (f"[드라이런] {person_name} / {stock_name} → J{empty_row}, "
+                      f"K{empty_row}={rec_date} 에 기록 예정 (실제 쓰기 없음)")
+
     cell_j = gspread.Cell(row=empty_row, col=10, value=stock_name)
     cell_k = gspread.Cell(row=empty_row, col=11, value=str(rec_date))
     ws.update_cells([cell_j, cell_k], value_input_option="USER_ENTERED")
-    return True, f"{person_name} / {stock_name} 추가 완료"
+    return True, f"{person_name} / {stock_name} 추가 완료 (J{empty_row})"
 
 
 def get_rec_date(date_str=None):
@@ -85,28 +151,44 @@ def get_rec_date(date_str=None):
     return d - datetime.timedelta(days=d.weekday())
 
 
+def _flag(name):
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "y")
+
+
 def run():
     stocks_raw = os.environ.get("STOCKS", "")
     rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
+    dry_run = _flag("DRY_RUN")
+    allow_dup = _flag("ALLOW_DUP")
 
     if not stocks_raw:
         print("[오류] STOCKS 환경변수 미설정")
         sys.exit(1)
 
-    pairs = [s.strip().split(":") for s in stocks_raw.split(",") if ":" in s]
+    pairs = [s.strip().split(":", 1) for s in stocks_raw.split(",") if ":" in s]
+    print("=" * 60)
+    print("모드: 드라이런(읽기전용 — 시트 변경 없음)" if dry_run else "모드: 실제 기록")
     print(f"추천일: {rec_date}")
-    print(f"입력 종목: {len(pairs)}건\n")
+    print(f"입력 종목: {len(pairs)}건")
+    print("=" * 60 + "\n")
 
     ws = get_worksheet()
+    print(f"대상 시트: {ws.title}\n")
     all_vals = ws.get_all_values()
 
+    fails = 0
     for person, stock in pairs:
-        ok, msg = add_stock(ws, all_vals, person.strip(), stock.strip(), rec_date)
-        print(f"  {'✅' if ok else '❌'} {msg}")
-        if ok:
+        ok, msg = add_stock(ws, all_vals, person.strip(), stock.strip(), rec_date,
+                            dry_run=dry_run, allow_dup=allow_dup)
+        print(f"  {'✅' if ok else '❌'} {msg}\n")
+        if not ok:
+            fails += 1
+        if ok and not dry_run:
             all_vals = ws.get_all_values()
 
-    print(f"\n처리 완료")
+    print(f"처리 완료 (실패 {fails}건)")
+    if dry_run:
+        print("※ 드라이런이므로 시트는 그대로입니다. 확인 후 dry_run=false로 재실행하세요.")
 
 
 if __name__ == "__main__":
