@@ -188,6 +188,46 @@ def rename_stock(ws, all_values, person_name, old_name, new_name, dry_run=False)
     return True, f"J{row} '{cur}' → '{new_name}' 교정 완료"
 
 
+def remove_stock(ws, all_values, person_name, stock_name, dry_run=False):
+    """활성(J:N) 한 행을 비운다. 오기록 취소용.
+    실현(P:U)은 확정 과거값이므로 대상 제외(절대규칙 4). 후보가 여럿이면 중단."""
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    if dry_run:
+        describe_block(all_values, block)
+
+    targets = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        j = row[9] if len(row) > 9 else ""
+        if j and _same_stock(j, stock_name):
+            k = row[10] if len(row) > 10 else ""
+            targets.append((r, j, k))
+    if not targets:
+        return False, f"'{person_name}' 활성 종목에서 '{stock_name}'을 찾을 수 없음"
+    if len(targets) > 1:
+        return False, (f"'{stock_name}' 후보 다수 → " +
+                       ", ".join(f"J{r}='{v}'({k})" for r, v, k in targets) +
+                       " (수동 처리 필요)")
+
+    row, cur, k = targets[0]
+    if dry_run:
+        return True, f"[드라이런] J{row}:N{row} '{cur}' (추천일 {k}) 삭제 예정 (실제 쓰기 없음)"
+
+    ws.batch_update([{"range": f"J{row}:N{row}", "values": [["", "", "", "", ""]]}],
+                    value_input_option="USER_ENTERED")
+    return True, f"J{row}:N{row} '{cur}' (추천일 {k}) 삭제 완료"
+
+
 def _flag(name):
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "y")
 
@@ -195,12 +235,13 @@ def _flag(name):
 def run():
     stocks_raw = os.environ.get("STOCKS", "")
     rename_raw = os.environ.get("RENAME", "")
+    remove_raw = os.environ.get("REMOVE", "")
     rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
     dry_run = _flag("DRY_RUN")
     allow_dup = _flag("ALLOW_DUP")
 
-    if not stocks_raw and not rename_raw:
-        print("[오류] STOCKS 또는 RENAME 중 하나는 필요")
+    if not stocks_raw and not rename_raw and not remove_raw:
+        print("[오류] STOCKS / RENAME / REMOVE 중 하나는 필요")
         sys.exit(1)
 
     pairs = [s.strip().split(":", 1) for s in stocks_raw.split(",") if ":" in s]
@@ -214,7 +255,8 @@ def run():
     print("=" * 60)
     print("모드: 드라이런(읽기전용 — 시트 변경 없음)" if dry_run else "모드: 실제 기록")
     print(f"추천일: {rec_date}")
-    print(f"입력 종목: {len(pairs)}건 / 교정: {len(renames)}건")
+    removes = [s.strip().split(":", 1) for s in remove_raw.split(",") if ":" in s]
+    print(f"입력 종목: {len(pairs)}건 / 교정: {len(renames)}건 / 삭제: {len(removes)}건")
     print("=" * 60 + "\n")
 
     ws = get_worksheet()
@@ -224,6 +266,14 @@ def run():
     fails = 0
     for person, old, new in renames:
         ok, msg = rename_stock(ws, all_vals, person, old, new, dry_run=dry_run)
+        print(f"  {'✅' if ok else '❌'} {msg}\n")
+        if not ok:
+            fails += 1
+        if ok and not dry_run:
+            all_vals = ws.get_all_values()
+
+    for person, stock in removes:
+        ok, msg = remove_stock(ws, all_vals, person.strip(), stock.strip(), dry_run=dry_run)
         print(f"  {'✅' if ok else '❌'} {msg}\n")
         if not ok:
             fails += 1

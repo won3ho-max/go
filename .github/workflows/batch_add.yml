@@ -11,6 +11,10 @@ on:
         description: '종목명 교정 — 이름:기존>새이름 (쉼표 구분). 예: 김동환:SKM>SK텔레콤'
         required: false
         type: string
+      remove:
+        description: '오기록 삭제 — 이름:종목명 (쉼표 구분). 활성 J:N만 비움'
+        required: false
+        type: string
       rec_date:
         description: '추천일 (YYYY-MM-DD, 비우면 이번주 월요일)'
         required: false
@@ -49,6 +53,7 @@ jobs:
           GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
           STOCKS:              ${{ inputs.stocks }}
           RENAME:              ${{ inputs.rename }}
+          REMOVE:              ${{ inputs.remove }}
           REC_DATE:            ${{ inputs.rec_date }}
           DRY_RUN:             ${{ inputs.dry_run }}
           ALLOW_DUP:           ${{ inputs.allow_dup }}
