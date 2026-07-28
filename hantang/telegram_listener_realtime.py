@@ -367,9 +367,11 @@ def _naver_items(query: str):
     return items
 
 
-def _pick(items, code: str = "", name: str = ""):
+def _pick(items, code: str = "", name: str = "", strict_foreign: bool = False):
     """items에서 조건에 맞는 종목을 (정식명, 코드, KR여부)로 반환. 국내 우선.
-    code 지정 시 티커 완전일치, name 지정 시 공백무시 완전일치/부분포함."""
+    code 지정 시 티커 완전일치, name 지정 시 공백무시 완전일치/부분포함.
+    strict_foreign=True면 해외 종목은 '완전일치'일 때만 채택(약어 오탐 방지).
+      예: 'SKT'가 'SK Telecom Co Ltd ADR'에 부분포함되어 채택되던 사고 차단."""
     kr = us = None
     for it in items or []:
         nm = (it.get("name") or "").strip()
@@ -384,13 +386,51 @@ def _pick(items, code: str = "", name: str = ""):
                 continue
         elif name:
             a, b = _norm(name), _norm(nm)
-            if not (a and b and (a == b or a in b or b in a)):
+            if not (a and b):
+                continue
+            if not is_kr and strict_foreign:
+                # 해외는 완전일치만. 단 ADR은 국내 상장분으로 대체될 수 있으므로 통과시킨다
+                # (대체 실패 시 호출부에서 채택하지 않음).
+                if a != b and not _is_adr(nm):
+                    continue
+            elif not (a == b or a in b or b in a):
                 continue
         if is_kr:
             kr = kr or (nm, cd, True)
         elif nation in ("USA", ""):
             us = us or (nm, cd, False)
     return kr or us
+
+
+def _is_adr(name: str) -> bool:
+    return bool(re.search(r"\bADR\s*$", str(name or "").strip(), re.I))
+
+
+_SUFFIX_RE = re.compile(r"(지주회사|지주|홀딩스|그룹|코퍼레이션|주식회사)\s*$")
+
+
+def _domestic_for_adr(nm: str, cd: str):
+    """미국 ADR로 판정된 종목의 국내 상장분을 찾는다. (res, 사용한 검색어) 반환.
+
+    ① 티커로 재조회해 한글 표기 확보(예: SKM → 'SK텔레콤 ADR')
+    ② 'ADR' 제거 후 표기 변형으로 국내(KOSPI/KOSDAQ) 검색
+       (예: '포스코 홀딩스' → '포스코' → POSCO홀딩스, 'KB금융지주' → 'KB금융')
+    국내 상장이 없으면 (None, "") — TSMC·알리바바 같은 순수 해외 ADR은 그대로 둔다.
+    """
+    ko = nm
+    for it in (_naver_items(cd) or []):
+        if (it.get("code") or "").upper() == cd.upper() and it.get("name"):
+            ko = it["name"]
+            break
+    base = re.sub(r"\s*ADR\s*$", "", ko, flags=re.I).strip()
+    variants = [base, base.replace(" ", ""), _SUFFIX_RE.sub("", base).strip()]
+    if base.split():
+        variants.append(base.split()[0])
+    for v in dict.fromkeys(v for v in variants if len(v) >= 2):
+        for it in (_naver_items(v) or []):
+            if it.get("typeCode") in ("KOSPI", "KOSDAQ") and it.get("code"):
+                return (it["name"], it["code"], True), v
+    return None, ""
 
 
 def _fmt_stock(res) -> str:
@@ -424,6 +464,9 @@ def resolve_stock_llm(text: str):
         "JSON 한 줄만 출력해라.\n"
         '형식: {"name_ko":"한글 종목명","name_en":"영문 정식명","ticker":"티커","market":"KR 또는 US"}\n'
         "- 아는 값은 최대한 채운다. 특히 ticker는 아는 경우 반드시 채운다(미국=대문자 영문, 한국=6자리 숫자).\n"
+        "- SKT·삼전·하이닉스·현차처럼 줄임말이면 국내 정식 종목명으로 풀어서 name_ko에 넣는다.\n"
+        "- 한국거래소 상장사면 market=KR, ticker=6자리 숫자로 답한다. "
+        "미국 ADR(SKM·PKX·KB 등)은 원문이 명시적으로 미국 상장을 지목한 경우가 아니면 쓰지 않는다.\n"
         "- 모르는 항목은 빈 문자열.\n"
         '- 종목을 특정할 수 없으면 {"none":true} 만 출력.\n'
         "- 설명·코드블록 없이 JSON만.\n\n"
@@ -488,7 +531,10 @@ def resolve_stock(text: str):
     for nm in _heuristic_names(text):
         cands.append(("name", nm, "원문 토큰"))
 
+    prefer_kr = bool(info) and (info.get("market", "").upper() == "KR")
+    deferred = None      # 국내 후보를 더 찾아본 뒤에야 채택할 해외 결과
     seen = set()
+
     for kind, val, why in cands:
         key = (kind, val.upper())
         if key in seen:
@@ -498,16 +544,37 @@ def resolve_stock(text: str):
         if items is None:
             notes.append(f"{why}('{val}') 네이버 조회 오류")
             continue
+        loose = not why.startswith("원문 토큰")   # 휴리스틱 후보는 해외 완전일치만 허용
         res = _pick(items, code=val if kind == "code" else "",
-                    name="" if kind == "code" else val)
+                    name="" if kind == "code" else val, strict_foreign=not loose)
         # 이름 매칭은 실패했지만 검색결과가 1건뿐이면 단독 채택(update_gsheets와 동일 규칙)
-        if not res and kind == "name" and len(items) == 1:
+        if not res and kind == "name" and len(items) == 1 and loose:
             res = _pick(items)
-        if res:
-            return _fmt_stock(res), f"{why} '{val}' → 네이버 {res[0]}({res[1]})"
-        if kind == "code" or why.startswith("LLM"):
-            notes.append(f"{why}('{val}') 네이버 미검증")
+        if not res:
+            if kind == "code" or why.startswith("LLM"):
+                notes.append(f"{why}('{val}') 네이버 미검증")
+            continue
 
+        nm, cd, is_kr = res
+        # 국내 상장사의 미국 ADR이면 국내 상장분으로 대체(스터디는 국내 상장 기준)
+        if not is_kr and _is_adr(nm):
+            dom, via = _domestic_for_adr(nm, cd)
+            if dom:
+                return _fmt_stock(dom), (f"{why} '{val}' → ADR({nm}/{cd}) 감지 "
+                                         f"→ 국내상장 대체 '{via}' → {dom[0]}({dom[1]})")
+            if prefer_kr or not loose:
+                notes.append(f"{why}('{val}') 해외 ADR({cd})만 확인 — 국내상장 미발견")
+                continue
+        if is_kr:
+            return _fmt_stock(res), f"{why} '{val}' → 네이버 {nm}({cd})"
+        if prefer_kr:
+            deferred = deferred or (res, why, val)
+            continue
+        return _fmt_stock(res), f"{why} '{val}' → 네이버 {nm}({cd})"
+
+    if deferred:
+        res, why, val = deferred
+        return _fmt_stock(res), f"{why} '{val}' → 네이버 {res[0]}({res[1]}) (국내 상장 없음)"
     return None, "; ".join(notes[:4]) or "후보 없음"
 
 

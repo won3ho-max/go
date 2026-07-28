@@ -151,25 +151,70 @@ def get_rec_date(date_str=None):
     return d - datetime.timedelta(days=d.weekday())
 
 
+def rename_stock(ws, all_values, person_name, old_name, new_name, dry_run=False):
+    """활성(J열) 종목명 교정. 추천일(K)·수익률은 건드리지 않는다.
+    실현(P열)은 확정 과거값이므로 대상에서 제외(절대규칙 4)."""
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    if dry_run:
+        describe_block(all_values, block)
+
+    targets = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        j = all_values[idx][9] if len(all_values[idx]) > 9 else ""
+        if j and _same_stock(j, old_name):
+            targets.append((r, j))
+    if not targets:
+        return False, f"'{person_name}' 활성 종목에서 '{old_name}'을 찾을 수 없음"
+    if len(targets) > 1:
+        return False, (f"'{old_name}' 후보 다수 → " +
+                       ", ".join(f"J{r}='{v}'" for r, v in targets) + " (수동 처리 필요)")
+
+    row, cur = targets[0]
+    if dry_run:
+        return True, f"[드라이런] J{row} '{cur}' → '{new_name}' 로 교정 예정 (실제 쓰기 없음)"
+
+    ws.update_cells([gspread.Cell(row=row, col=10, value=new_name)],
+                    value_input_option="USER_ENTERED")
+    return True, f"J{row} '{cur}' → '{new_name}' 교정 완료"
+
+
 def _flag(name):
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "y")
 
 
 def run():
     stocks_raw = os.environ.get("STOCKS", "")
+    rename_raw = os.environ.get("RENAME", "")
     rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
     dry_run = _flag("DRY_RUN")
     allow_dup = _flag("ALLOW_DUP")
 
-    if not stocks_raw:
-        print("[오류] STOCKS 환경변수 미설정")
+    if not stocks_raw and not rename_raw:
+        print("[오류] STOCKS 또는 RENAME 중 하나는 필요")
         sys.exit(1)
 
     pairs = [s.strip().split(":", 1) for s in stocks_raw.split(",") if ":" in s]
+    renames = []
+    for s in rename_raw.split(","):
+        s = s.strip()
+        if ":" in s and ">" in s:
+            person, rest = s.split(":", 1)
+            old, new = rest.split(">", 1)
+            renames.append((person.strip(), old.strip(), new.strip()))
     print("=" * 60)
     print("모드: 드라이런(읽기전용 — 시트 변경 없음)" if dry_run else "모드: 실제 기록")
     print(f"추천일: {rec_date}")
-    print(f"입력 종목: {len(pairs)}건")
+    print(f"입력 종목: {len(pairs)}건 / 교정: {len(renames)}건")
     print("=" * 60 + "\n")
 
     ws = get_worksheet()
@@ -177,6 +222,14 @@ def run():
     all_vals = ws.get_all_values()
 
     fails = 0
+    for person, old, new in renames:
+        ok, msg = rename_stock(ws, all_vals, person, old, new, dry_run=dry_run)
+        print(f"  {'✅' if ok else '❌'} {msg}\n")
+        if not ok:
+            fails += 1
+        if ok and not dry_run:
+            all_vals = ws.get_all_values()
+
     for person, stock in pairs:
         ok, msg = add_stock(ws, all_vals, person.strip(), stock.strip(), rec_date,
                             dry_run=dry_run, allow_dup=allow_dup)

@@ -5,7 +5,11 @@ on:
     inputs:
       stocks:
         description: '이름:종목명 (쉼표 구분). 예: 송지호:자화전자,조형오:티에이치엔'
-        required: true
+        required: false
+        type: string
+      rename:
+        description: '종목명 교정 — 이름:기존>새이름 (쉼표 구분). 예: 김동환:SKM>SK텔레콤'
+        required: false
         type: string
       rec_date:
         description: '추천일 (YYYY-MM-DD, 비우면 이번주 월요일)'
@@ -44,6 +48,7 @@ jobs:
           GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
           GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
           STOCKS:              ${{ inputs.stocks }}
+          RENAME:              ${{ inputs.rename }}
           REC_DATE:            ${{ inputs.rec_date }}
           DRY_RUN:             ${{ inputs.dry_run }}
           ALLOW_DUP:           ${{ inputs.allow_dup }}
