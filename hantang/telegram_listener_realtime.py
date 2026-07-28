@@ -169,6 +169,32 @@ def find_person_blocks(all_values: list) -> list:
     return blocks
 
 
+def find_active_dup(all_values, person_name, stock_name):
+    """이미 활성(J열)에 같은 종목을 보유 중이면 'J행=종목명(추천일)' 문자열 반환.
+    추천일이 달라도 잡아낸다(날짜 기준 중복체크로는 못 막는 재기록 방지)."""
+    blocks = find_person_blocks(all_values)
+    block = next((b for b in blocks
+                  if b["person"] == person_name or person_name in b["person"]), None)
+    if not block:
+        return ""
+    t_code, t_base = _split_stock_label(stock_name)
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        j = all_values[idx][9] if len(all_values[idx]) > 9 else ""
+        if not j:
+            continue
+        k = all_values[idx][10] if len(all_values[idx]) > 10 else ""
+        j_code, j_base = _split_stock_label(str(j))
+        same = (t_code and j_code and t_code == j_code) or (
+            len(t_base) >= 2 and len(j_base) >= 2
+            and (t_base == j_base or t_base in j_base or j_base in t_base))
+        if same:
+            return f"J{r}='{j}' (추천일 {k})"
+    return ""
+
+
 def add_stock(ws, all_values, person_name, stock_name, rec_date):
     blocks = find_person_blocks(all_values)
     block = next((b for b in blocks
@@ -648,6 +674,14 @@ def handle_message(msg: dict, cache: SheetCache):
             log(f"[매수-미인식] {member}: {why}")
             return
         ws, values = cache.ensure()
+        dup = find_active_dup(values, member, stock)
+        if dup:
+            notify_admin(f"⚠️ 매수 감지 — {member} / {stock}\n원문: {body}\n"
+                         f"※ 이미 활성 보유 중: {dup}\n"
+                         f"→ 중복 의심으로 자동기록 보류(정당한 재추천이면 "
+                         f"batch_add allow_dup=true로 수동 추가)\n근거: {why}")
+            log(f"[매수-중복보류] {member}/{stock}: {dup}")
+            return
         ok, result = add_stock(ws, values, member, stock, today_kst())
         if ok:
             cache.refresh()
