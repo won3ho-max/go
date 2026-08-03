@@ -1,0 +1,52 @@
+name: 리스너 로그 조회
+
+# 읽기 전용. GCP 상주 리스너의 로그를 그대로 가져와 보여준다.
+# 자동인식 실패·중복보류 등 텔레그램 알림의 근거를 되짚을 때 사용.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pattern:
+        description: 'grep 확장정규식 (비우면 전체). 예: 중복보류|미인식'
+        required: false
+        type: string
+      lines:
+        description: '출력 줄 수 (기본 80)'
+        required: false
+        default: '80'
+        type: string
+      scan:
+        description: '로그 뒤쪽 몇 줄을 훑을지 (기본 5000)'
+        required: false
+        default: '5000'
+        type: string
+
+jobs:
+  tail:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH key setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 34.57.78.164 >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Fetch log
+        env:
+          PATTERN: ${{ inputs.pattern }}
+          LINES:   ${{ inputs.lines }}
+          SCAN:    ${{ inputs.scan }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 \
+            "PATTERN='$PATTERN' LINES='$LINES' SCAN='$SCAN' bash -s" << 'ENDSSH'
+          LOG=/home/won3ho/hantang_listener.log
+          [ -f "$LOG" ] || { echo "로그 파일 없음: $LOG"; exit 1; }
+          echo "===== $LOG (최근 ${SCAN}줄 중 ${LINES}줄) ====="
+          if [ -n "$PATTERN" ]; then
+            tail -n "$SCAN" "$LOG" | grep -a -E "$PATTERN" | tail -n "$LINES"
+          else
+            tail -n "$LINES" "$LOG"
+          fi
+          echo "===== end ====="
+          ENDSSH
