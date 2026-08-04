@@ -15,6 +15,10 @@ on:
         description: '오기록 삭제 — 이름:종목명 (쉼표 구분). 활성 J:N만 비움'
         required: false
         type: string
+      rm_penalty:
+        description: '잘못된 미추천 패널티 삭제 — 이름:YYYY-MM-DD (쉼표 구분)'
+        required: false
+        type: string
       rec_date:
         description: '추천일 (YYYY-MM-DD, 비우면 이번주 월요일)'
         required: false
@@ -54,6 +58,7 @@ jobs:
           STOCKS:              ${{ inputs.stocks }}
           RENAME:              ${{ inputs.rename }}
           REMOVE:              ${{ inputs.remove }}
+          RM_PENALTY:          ${{ inputs.rm_penalty }}
           REC_DATE:            ${{ inputs.rec_date }}
           DRY_RUN:             ${{ inputs.dry_run }}
           ALLOW_DUP:           ${{ inputs.allow_dup }}

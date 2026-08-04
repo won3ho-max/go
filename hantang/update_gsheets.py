@@ -130,6 +130,50 @@ def fetch_price(market: str, code: str, date: datetime.date | None = None) -> fl
         return None
 
 
+_last_close_cache: dict = {}
+
+def last_completed_session(market: str) -> datetime.date:
+    """'마지막으로 장이 끝난' 날짜(달력 미적용 기준일). KST 실행 시각으로 판단.
+      KR: 15:30 마감 → 16시 이후면 오늘, 아니면 어제
+      US: 16:00 ET 마감(=익일 05~06시 KST) → 06시 이후면 어제, 아니면 그제
+    데일리는 07:00 KST에 도는데, 이때 KR은 어제·US도 어제 세션이 마지막 완료분이다."""
+    from datetime import timezone, timedelta
+    now = datetime.datetime.now(timezone(timedelta(hours=9)))
+    if market == "KR":
+        base = now.date() if now.hour >= 16 else now.date() - datetime.timedelta(days=1)
+    else:
+        base = now.date() - datetime.timedelta(days=1 if now.hour >= 6 else 2)
+    return prev_trading_day(base, market)
+
+
+def latest_close(market: str, code: str):
+    """현재가로 쓸 '마지막 완료 세션 종가'.
+
+    기존 fetch_price(date=None)은 yfinance period='2d' + iloc[-1]이라
+      · 신규 봉이 아직 안 올라오면 이틀 전 종가를 집고(2026-08-04 국내 종목 하루 밀림)
+      · 장중에 돌리면 종가가 아니라 체결가를 집는다.
+    거래소 달력으로 기준일을 정하고 '그날 이하 마지막 종가'를 쓴다(미래 데이터 불가)."""
+    key = (market, code)
+    if key in _last_close_cache:
+        return _last_close_cache[key]
+    target = last_completed_session(market)
+    price, on = close_on_or_before(market, code, target, with_date=True)
+    if price is not None and on and on != target:
+        print(f"    [주의] {code} 현재가가 {target}가 아닌 {on} 종가 (야후 미게시 추정)")
+    _last_close_cache[key] = price
+    return price
+
+
+def prefetch_last_closes(pairs):
+    """현재가(마지막 완료 세션 종가)를 병렬로 미리 채운다."""
+    uniq = {(m, c) for m, c in pairs if (m, c) not in _last_close_cache}
+    if not uniq:
+        return
+    print(f"  병렬 종가 조회: {len(uniq)}건...")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(as_completed([pool.submit(latest_close, m, c) for m, c in uniq]))
+
+
 def prefetch_prices(jobs: list[tuple[str, str, datetime.date | None]]):
     """병렬로 주가를 미리 조회해서 캐시에 채운다."""
     unique = {(m, c, str(d)): (m, c, d) for m, c, d in jobs
@@ -323,7 +367,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
     updated, sold, skipped = [], [], []
 
     # ── 병렬 주가 조회를 위한 사전 스캔 ────────────────────────────────
-    price_jobs = []
+    price_jobs, close_jobs = [], []
     for block in blocks:
         for row_1 in range(block["row_start"], block["row_end"] + 1):
             idx = row_1 - 1
@@ -337,7 +381,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
             market, code = parse_stock(name.strip())
             if not market:
                 continue
-            price_jobs.append((market, code, None))
+            close_jobs.append((market, code))
             try:
                 rec_date = datetime.date.fromisoformat(rec_date_s[:10])
                 sell_date = calc_sell_date(rec_date, market)
@@ -346,6 +390,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
             except Exception:
                 pass
     prefetch_prices(price_jobs)
+    prefetch_last_closes(close_jobs)
 
     for block in blocks:
         person    = block["person"]
@@ -392,7 +437,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
 
             # 매 실행마다 기준가=추천일 종가 검증, 현재가=실행 시점 가격
             correct_base = fetch_price(market, code, rec_date)
-            cur_price_now = fetch_price(market, code)
+            cur_price_now = latest_close(market, code)
 
             if correct_base:
                 updates.append((row_1, 12, correct_base))  # L: 추천일 종가
@@ -833,9 +878,11 @@ def today_kst():
     from datetime import timezone, timedelta
     return datetime.datetime.now(timezone(timedelta(hours=9))).date()
 
-def close_on_or_before(market: str, code: str, date: datetime.date):
+def close_on_or_before(market: str, code: str, date: datetime.date, with_date: bool = False):
     """매도일 종가. 그날이 휴장이면 '직전 거래일' 종가를 쓴다(관례).
-    fetch_price(date)는 다음 거래일 종가를 집어오므로 매도가 확정엔 이 함수를 쓸 것."""
+    fetch_price(date)는 다음 거래일 종가를 집어오므로 매도가 확정엔 이 함수를 쓸 것.
+    with_date=True면 (종가, 그 종가의 날짜) 튜플을 준다."""
+    fail = (None, None) if with_date else None
     try:
         if market == "KR":
             suffix = ".KQ" if code in KOSDAQ_CODES else ".KS"
@@ -847,13 +894,19 @@ def close_on_or_before(market: str, code: str, date: datetime.date):
             end=str(date + datetime.timedelta(days=1)), prepost=False)
         hist = hist["Close"].dropna()
         if hist.empty:
-            return None
+            return fail
         price = float(hist.iloc[-1])   # 매도일 이하 마지막 종가
         if math.isnan(price) or math.isinf(price):
-            return None
-        return round(price, 2) if market == "US" else round(price)
+            return fail
+        val = round(price, 2) if market == "US" else round(price)
+        if with_date:
+            try:
+                return val, hist.index[-1].date()
+            except Exception:
+                return val, None
+        return val
     except Exception:
-        return None
+        return fail
 
 
 def fix_pending_sells(ss, today: datetime.date):

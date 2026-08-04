@@ -228,6 +228,45 @@ def remove_stock(ws, all_values, person_name, stock_name, dry_run=False):
     return True, f"J{row}:N{row} '{cur}' (추천일 {k}) 삭제 완료"
 
 
+def remove_penalty(ws, all_values, person_name, date_str, dry_run=False):
+    """잘못 부과된 '미추천(패널티)' 행(P:U)만 지운다.
+    일반 실현 기록은 절대 대상이 아니다 — P열이 정확히 '미추천(패널티)'인 행만 본다."""
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    if dry_run:
+        describe_block(all_values, block)
+
+    targets = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        p = (row[15] if len(row) > 15 else "").strip()
+        q = (row[16] if len(row) > 16 else "").strip()
+        if p == "미추천(패널티)" and q[:10] == date_str:
+            targets.append(r)
+    if not targets:
+        return False, f"'{person_name}'에 {date_str}자 미추천 패널티 행이 없음"
+    if len(targets) > 1:
+        return False, f"{date_str}자 패널티 행 다수(P{targets}) — 수동 처리 필요"
+
+    row = targets[0]
+    if dry_run:
+        return True, f"[드라이런] P{row}:U{row} {date_str}자 미추천 패널티 삭제 예정 (실제 쓰기 없음)"
+
+    ws.batch_update([{"range": f"P{row}:U{row}",
+                      "values": [["", "", "", "", "", ""]]}],
+                    value_input_option="USER_ENTERED")
+    return True, f"P{row}:U{row} {date_str}자 미추천 패널티 삭제 완료"
+
+
 def _flag(name):
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "y")
 
@@ -236,12 +275,13 @@ def run():
     stocks_raw = os.environ.get("STOCKS", "")
     rename_raw = os.environ.get("RENAME", "")
     remove_raw = os.environ.get("REMOVE", "")
+    penalty_raw = os.environ.get("RM_PENALTY", "")
     rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
     dry_run = _flag("DRY_RUN")
     allow_dup = _flag("ALLOW_DUP")
 
-    if not stocks_raw and not rename_raw and not remove_raw:
-        print("[오류] STOCKS / RENAME / REMOVE 중 하나는 필요")
+    if not (stocks_raw or rename_raw or remove_raw or penalty_raw):
+        print("[오류] STOCKS / RENAME / REMOVE / RM_PENALTY 중 하나는 필요")
         sys.exit(1)
 
     pairs = [s.strip().split(":", 1) for s in stocks_raw.split(",") if ":" in s]
@@ -266,6 +306,18 @@ def run():
     fails = 0
     for person, old, new in renames:
         ok, msg = rename_stock(ws, all_vals, person, old, new, dry_run=dry_run)
+        print(f"  {'✅' if ok else '❌'} {msg}\n")
+        if not ok:
+            fails += 1
+        if ok and not dry_run:
+            all_vals = ws.get_all_values()
+
+    for s2 in penalty_raw.split(","):
+        s2 = s2.strip()
+        if ":" not in s2:
+            continue
+        person, d = s2.split(":", 1)
+        ok, msg = remove_penalty(ws, all_vals, person.strip(), d.strip(), dry_run=dry_run)
         print(f"  {'✅' if ok else '❌'} {msg}\n")
         if not ok:
             fails += 1
