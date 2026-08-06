@@ -147,56 +147,99 @@ def fetch_weather_seoul() -> dict | None:
         return None
 
 # ── 시장 지표 조회 ───────────────────────────────────────────────────────
-def _fetch_naver_index(code: str, name: str, tag: str) -> dict | None:
-    """네이버 금융 API로 한국 지수 조회 (실시간 정확도)"""
+# (구) _fetch_naver_index / _fetch_yahoo_index 제거 — 아래 네이버 일별시세 경로로 일원화
+
+# 시장지표는 전부 네이버 일별 시세로 조회한다.
+#   Yahoo(^KS11·^N225 등)는 결측일이 생긴다 — 2026-08-05 국내·일본 지수 봉이 통째로
+#   빠져 있어 8/6 카드에 이틀 전(8/4) 값이 실렸다. 네이버는 같은 날짜가 정상 존재.
+#   또 행마다 fluctuationsRatio(전일 대비)가 같이 오므로 '두 봉 비교'가 필요 없다.
+NAVER_INDICES = [
+    ("KOSPI",  "KOSPI",     "전일", True),
+    ("KOSDAQ", "KOSDAQ",    "전일", True),
+    (".INX",   "S&P 500",   "",     False),
+    (".IXIC",  "NASDAQ",    "",     False),
+    (".N225",  "닛케이225",  "",     False),
+    (".HSI",   "항셍",       "",     False),
+    (".SSEC",  "상해종합",   "",     False),
+]
+
+
+def _index_target_date(domestic: bool) -> datetime.date:
+    """'마지막으로 장이 끝난' 날짜. 장중 값이 섞이지 않게 하는 기준선.
+       국내: KST 16시 이후면 당일, 아니면 전일
+       해외: KST 6시 이후면 전일, 아니면 그제 (데일리는 07:00 실행)"""
+    from datetime import timezone, timedelta
+    now = datetime.datetime.now(timezone(timedelta(hours=9)))
+    if domestic:
+        return now.date() if now.hour >= 16 else now.date() - datetime.timedelta(days=1)
+    return now.date() - datetime.timedelta(days=1 if now.hour >= 6 else 2)
+
+
+def _naver_rows(url: str):
+    r = requests.get(url, timeout=8,
+                     headers={"User-Agent": "Mozilla/5.0",
+                              "Referer": "https://m.stock.naver.com/"})
+    rows = r.json()
+    return rows if isinstance(rows, list) else []
+
+
+def _pick_row(rows, target: datetime.date):
+    """기준일 이하의 가장 최근 행. 장중 행(오늘)이 섞여도 걸러진다."""
+    for row in rows:
+        d = str(row.get("localTradedAt", ""))[:10]
+        try:
+            if datetime.date.fromisoformat(d) <= target:
+                return row, d
+        except ValueError:
+            continue
+    return None, ""
+
+
+def _fetch_naver_index_row(code: str, name: str, tag: str, domestic: bool):
     try:
-        url = f"https://m.stock.naver.com/api/index/{code}/basic"
-        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
-        data = r.json()
-        price = float(data["closePrice"].replace(",", ""))
-        ratio = float(data["fluctuationsRatio"]) / 100
-        direction = data["compareToPreviousPrice"]["code"]  # 2=상승, 5=하락
-        if direction == "5":
-            ratio = -abs(ratio)
+        base = ("https://m.stock.naver.com/api/index/{}/price"
+                if domestic else "https://api.stock.naver.com/index/{}/price")
+        rows = _naver_rows(base.format(code) + "?pageSize=8&page=1")
+        target = _index_target_date(domestic)
+        row, on = _pick_row(rows, target)
+        if not row:
+            print(f"  [지수 없음] {code}: 기준일 {target} 이하 데이터 없음")
+            return None
+        price = float(str(row["closePrice"]).replace(",", ""))
+        ratio = float(str(row["fluctuationsRatio"]).replace(",", "")) / 100
+        if on != str(target):
+            print(f"  [주의] {name} {target} 아닌 {on} 종가 사용(휴장 또는 미게시)")
         return {"name": name, "tag": tag, "price": price, "change": ratio}
     except Exception as e:
         print(f"  [네이버 지수 실패] {code}: {e}")
         return None
 
-def _fetch_yahoo_index(symbol: str, name: str, tag: str) -> dict | None:
-    """Yahoo Finance로 해외 지수/환율 조회 (NaN 자동 제거)"""
+
+def _fetch_usdkrw():
     try:
-        t = yf.Ticker(symbol)
-        hist = t.history(period="5d", prepost=False)
-        closes = hist["Close"].dropna()
-        if len(closes) >= 2:
-            cur  = float(closes.iloc[-1])
-            prev = float(closes.iloc[-2])
-            chg  = (cur - prev) / prev
-            return {"name": name, "tag": tag, "price": cur, "change": chg}
+        rows = _naver_rows("https://api.stock.naver.com/marketindex/exchange/"
+                           "FX_USDKRW/prices?page=1&pageSize=8")
+        row, on = _pick_row(rows, _index_target_date(False))
+        if not row:
+            return None
+        return {"name": "USD/KRW", "tag": "",
+                "price": float(str(row["closePrice"]).replace(",", "")),
+                "change": float(str(row["fluctuationsRatio"]).replace(",", "")) / 100}
     except Exception as e:
-        print(f"  [Yahoo 지수 실패] {symbol}: {e}")
-    return None
+        print(f"  [환율 조회 실패] {e}")
+        return None
+
 
 def fetch_market_data() -> list:
-    """KOSPI/KOSDAQ(네이버) + 미국/일본/중국/홍콩/환율(Yahoo) 조회"""
+    """국내·해외 지수 + 환율. 전부 네이버 일별 시세의 '마지막 완료 세션' 행을 쓴다."""
     results = []
-    # 국내 지수도 해외와 동일하게 '직전 완료 세션(전일) 종가 대비'로 계산
-    # (데일리는 개장 전 7시에 실행 → 네이버 장중 등락률은 0.00%로 나오는 문제 방지)
-    yahoo_indices = [
-        ("^KS11",    "KOSPI",    "전일"),
-        ("^KQ11",    "KOSDAQ",   "전일"),
-        ("^GSPC",    "S&P 500",  ""),
-        ("^IXIC",    "NASDAQ",   ""),
-        ("^N225",    "닛케이225", ""),
-        ("^HSI",     "항셍",     ""),
-        ("000001.SS","상해종합",  ""),
-        ("KRW=X",    "USD/KRW",  ""),
-    ]
-    for sym, name, tag in yahoo_indices:
-        r = _fetch_yahoo_index(sym, name, tag)
+    for code, name, tag, domestic in NAVER_INDICES:
+        r = _fetch_naver_index_row(code, name, tag, domestic)
         if r:
             results.append(r)
+    fx = _fetch_usdkrw()
+    if fx:
+        results.append(fx)
     return results
 
 # ── 포트폴리오 로드 ─────────────────────────────────────────────────────
