@@ -240,6 +240,9 @@ def fetch_market_data() -> list:
     fx = _fetch_usdkrw()
     if fx:
         results.append(fx)
+    if results:
+        print("  시장지표: " + " | ".join(
+            f"{r['name']} {r['price']:,.2f} {r['change']*100:+.2f}%" for r in results))
     return results
 
 # ── 포트폴리오 로드 ─────────────────────────────────────────────────────
