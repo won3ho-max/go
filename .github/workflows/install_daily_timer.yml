@@ -86,12 +86,27 @@ jobs:
           EOS
           chmod +x "$SCRIPT"
 
-          # 월~금 07:00 KST
-          ( crontab -l 2>/dev/null | grep -v hantang_daily_dispatch;
-            echo "0 7 * * 1-5 $SCRIPT >> $HOME_DIR/hantang_dispatch.log 2>&1" ) | crontab -
+          # cron 데몬 확보 (없으면 크론을 등록해도 안 돈다)
+          command -v crontab >/dev/null || sudo apt-get install -y -qq cron
+          sudo systemctl enable --now cron >/dev/null 2>&1 || true
+
+          # 월~금 07:00 KST.
+          # `... | crontab -` 파이프는 bash -s(스크립트가 stdin)와 겹쳐 빈 크론탭이 만들어졌다.
+          # 임시 파일로 넘겨 stdin 경합을 피한다.
+          TMP=$(mktemp)
+          crontab -l 2>/dev/null | grep -v hantang_daily_dispatch > "$TMP" || true
+          echo "0 7 * * 1-5 $SCRIPT >> $HOME_DIR/hantang_dispatch.log 2>&1" >> "$TMP"
+          echo "--- 등록할 크론탭 ---"; cat "$TMP"
+          crontab "$TMP"
+          rm -f "$TMP"
 
           echo "--- 설치 결과 ---"
           timedatectl | head -3
-          crontab -l | grep hantang_daily_dispatch
-          echo "TIMER_INSTALLED_OK"
+          systemctl is-active cron || echo "(cron 비활성)"
+          if crontab -l | grep hantang_daily_dispatch; then
+            echo "TIMER_INSTALLED_OK"
+          else
+            echo "[치명] 크론 등록 실패 — crontab -l 결과:"; crontab -l || true
+            exit 1
+          fi
           ENDSSH
