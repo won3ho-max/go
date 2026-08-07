@@ -219,31 +219,41 @@ def _search_naver_stock(name: str):
         items = resp.json().get("items", [])
 
         # 매칭되는 결과를 한국/해외로 분리 (한국 우선)
+        # 2패스: 완전일치·티커일치를 먼저 보고, 없을 때만 부분포함을 본다.
+        #   네이버는 'KODEX WTI원유선물'에 인버스(271050)를 정방향(261220)보다 앞에 준다.
+        #   1패스 + break 구조라 normalize_name이 정방향을 인버스로 바꿔버렸다.
         kr_match = None
         us_match = None
         name_nsp = name.replace(" ", "")
 
-        for item in items:
-            item_name = item.get("name", "")
-            item_code = item.get("code", "")
-            item_nsp = item_name.replace(" ", "")
-            # 이름 매칭: 한글/영문 동일, 공백무시 동일, 부분포함, 또는 티커코드 일치
-            matched = (item_name == name
-                       or name_nsp == item_nsp
-                       or name_nsp in item_nsp
-                       or name.upper() == item_code.upper())
-            if not matched:
-                continue
-            if not item_code:
-                continue
-            type_code = item.get("typeCode", "")
-            official_name = item.get("name", name)
+        for exact_only in (True, False):
+            for item in items:
+                item_name = item.get("name", "")
+                item_code = item.get("code", "")
+                item_nsp = item_name.replace(" ", "")
+                if not item_code:
+                    continue
+                exact = (item_name == name or name_nsp == item_nsp
+                         or name.upper() == item_code.upper())
+                if not exact:
+                    if exact_only:
+                        continue
+                    if name_nsp not in item_nsp:
+                        continue
+                    # 후보가 종목명의 절반도 설명 못하면 우연한 부분일치로 본다
+                    if len(name_nsp) * 2 < len(item_nsp):
+                        continue
+                type_code = item.get("typeCode", "")
+                official_name = item.get("name", name)
 
-            if type_code in ("KOSPI", "KOSDAQ"):
-                kr_match = (official_name, item_code, type_code)
-                break  # 한국 종목 발견 시 즉시 확정
-            elif not us_match:
-                us_match = (official_name, item_code, type_code)
+                if type_code in ("KOSPI", "KOSDAQ"):
+                    # 부분일치일 땐 군더더기가 가장 적은 이름을 고른다
+                    if kr_match is None or len(item_nsp) < len(kr_match[0].replace(" ", "")):
+                        kr_match = (official_name, item_code, type_code)
+                elif us_match is None or len(item_nsp) < len(us_match[0].replace(" ", "")):
+                    us_match = (official_name, item_code, type_code)
+            if kr_match or us_match:
+                break
 
         # 이름 매칭 실패했지만 검색 결과가 1건뿐이면 해당 종목으로 간주
         if not kr_match and not us_match and len(items) == 1:

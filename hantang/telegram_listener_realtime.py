@@ -398,34 +398,53 @@ def _pick(items, code: str = "", name: str = "", strict_foreign: bool = False):
     code 지정 시 티커 완전일치, name 지정 시 공백무시 완전일치/부분포함.
     strict_foreign=True면 해외 종목은 '완전일치'일 때만 채택(약어 오탐 방지).
       예: 'SKT'가 'SK Telecom Co Ltd ADR'에 부분포함되어 채택되던 사고 차단."""
-    kr = us = None
-    for it in items or []:
-        nm = (it.get("name") or "").strip()
-        cd = (it.get("code") or "").strip()
-        if not nm or not cd:
-            continue
-        tc = it.get("typeCode", "")
-        nation = it.get("nationCode", "")
-        is_kr = tc in ("KOSPI", "KOSDAQ")
-        if code:
-            if cd.upper() != code.strip().upper():
+    # 2패스: 완전일치를 먼저 훑고, 없을 때만 부분포함을 본다.
+    #   네이버는 'KODEX WTI원유선물' 검색에 인버스(271050)를 정방향(261220)보다
+    #   앞에 준다. 1패스로 훑으면 부분포함에 걸린 인버스가 이겨 반대 종목이 기록된다.
+    #   (2026-07-13 이원호 건 — 원문은 'KODEX WTI원유선물(H)'였다)
+    for exact_only in (True, False):
+        kr = us = None
+        for it in items or []:
+            nm = (it.get("name") or "").strip()
+            cd = (it.get("code") or "").strip()
+            if not nm or not cd:
                 continue
-        elif name:
-            a, b = _norm(name), _norm(nm)
-            if not (a and b):
-                continue
-            if not is_kr and strict_foreign:
-                # 해외는 완전일치만. 단 ADR은 국내 상장분으로 대체될 수 있으므로 통과시킨다
-                # (대체 실패 시 호출부에서 채택하지 않음).
-                if a != b and not _is_adr(nm):
+            tc = it.get("typeCode", "")
+            nation = it.get("nationCode", "")
+            is_kr = tc in ("KOSPI", "KOSDAQ")
+            if code:
+                if cd.upper() != code.strip().upper():
                     continue
-            elif not (a == b or a in b or b in a):
-                continue
-        if is_kr:
-            kr = kr or (nm, cd, True)
-        elif nation in ("USA", ""):
-            us = us or (nm, cd, False)
-    return kr or us
+            elif name:
+                a, b = _norm(name), _norm(nm)
+                if not (a and b):
+                    continue
+                if a != b:
+                    if exact_only:
+                        continue
+                    if not is_kr and strict_foreign:
+                        # 해외는 완전일치만. 단 ADR은 국내 상장분으로 대체될 수 있어 통과
+                        # (대체 실패 시 호출부에서 채택하지 않음).
+                        if not _is_adr(nm):
+                            continue
+                    elif not (a in b or b in a):
+                        continue
+                    # 후보가 종목명의 절반도 설명하지 못하면 우연한 부분일치로 본다.
+                    #   'SOL' → 'SOL AI반도체TOP2플러스' 같은 오탐 차단
+                    if len(a) * 2 < len(b):
+                        continue
+            if is_kr:
+                if kr is None or len(_norm(nm)) < len(_norm(kr[0])):
+                    kr = (nm, cd, True)   # 부분일치 땐 군더더기가 가장 적은 이름
+            elif nation in ("USA", ""):
+                if us is None or len(_norm(nm)) < len(_norm(us[0])):
+                    us = (nm, cd, False)
+        hit = kr or us
+        if hit:
+            return hit
+        if code:
+            break   # 티커 매칭은 완전일치뿐이라 2패스가 의미 없다
+    return None
 
 
 def _is_adr(name: str) -> bool:
