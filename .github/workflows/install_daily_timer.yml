@@ -40,6 +40,18 @@ jobs:
             echo "--- crontab ---";   crontab -l 2>/dev/null || echo "(비어있음)"
             echo "--- script ---";    ls -l "$SCRIPT" 2>/dev/null || echo "(없음)"
             echo "--- 최근 로그 ---"; tail -n 10 "$HOME_DIR/hantang_dispatch.log" 2>/dev/null || echo "(없음)"
+            # VM에 저장된 PAT이 실제로 통하는지 읽기(GET)로만 확인한다.
+            # POST로 확인하면 본채널에 카드가 나가므로 절대 쓰지 않는다.
+            echo "--- VM PAT 확인 ---"
+            if [ -f "$HOME_DIR/.hantang_dispatch_pat" ]; then
+              P=$(cat "$HOME_DIR/.hantang_dispatch_pat")
+              C=$(curl -s -o /dev/null -w "%{http_code}" \
+                    -H "Authorization: token $P" -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/won3ho-max/go/actions/workflows/daily_report.yml")
+              [ "$C" = "200" ] && echo "PAT_OK (워크플로 조회 200)" || echo "PAT_FAIL (code=$C)"
+            else
+              echo "(PAT 파일 없음)"
+            fi
             exit 0
           fi
 
