@@ -1,0 +1,97 @@
+name: 데일리 정시 트리거 설치(GCP VM)
+
+# GitHub Actions의 scheduled workflow는 큐에 밀린다(2026-08-07 관측: 07:00 예정 → 10:30 시작).
+# 상주 중인 GCP VM에서 07:00 KST 정각에 daily_report를 workflow_dispatch로 쏘게 한다.
+#
+# 사전 준비(사용자): 저장소 Secrets에 DISPATCH_PAT 추가.
+#   권한은 Actions(Read/write)만 있으면 된다. 기존 PAT 재사용 가능.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '설치할지 제거할지'
+        required: true
+        default: 'install'
+        type: choice
+        options: [install, uninstall, status]
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH key setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 34.57.78.164 >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Apply
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 \
+            "ACTION='${{ inputs.action }}' PAT='${{ secrets.DISPATCH_PAT }}' TGTOKEN='${{ secrets.HANTANG_TELEGRAM_TOKEN }}' bash -s" << 'ENDSSH'
+          set -e
+          HOME_DIR=/home/won3ho
+          SCRIPT="$HOME_DIR/hantang_daily_dispatch.sh"
+
+          if [ "$ACTION" = "status" ]; then
+            echo "--- timezone ---";  timedatectl | head -3
+            echo "--- crontab ---";   crontab -l 2>/dev/null || echo "(비어있음)"
+            echo "--- script ---";    ls -l "$SCRIPT" 2>/dev/null || echo "(없음)"
+            echo "--- 최근 로그 ---"; tail -n 10 "$HOME_DIR/hantang_dispatch.log" 2>/dev/null || echo "(없음)"
+            exit 0
+          fi
+
+          if [ "$ACTION" = "uninstall" ]; then
+            crontab -l 2>/dev/null | grep -v hantang_daily_dispatch | crontab - || true
+            rm -f "$SCRIPT" "$HOME_DIR/.hantang_dispatch_pat" "$HOME_DIR/.hantang_tg_token"
+            echo "TIMER_REMOVED"
+            exit 0
+          fi
+
+          [ -n "$PAT" ] || { echo "[치명] DISPATCH_PAT 시크릿이 비어 있음"; exit 1; }
+
+          # VM 시간대를 KST로 맞춘다. cron 표기가 직관적이 되고 리스너 로그도 KST로 찍힌다.
+          sudo timedatectl set-timezone Asia/Seoul
+
+          printf '%s' "$PAT"     > "$HOME_DIR/.hantang_dispatch_pat"
+          printf '%s' "$TGTOKEN" > "$HOME_DIR/.hantang_tg_token"
+          chmod 600 "$HOME_DIR/.hantang_dispatch_pat" "$HOME_DIR/.hantang_tg_token"
+
+          cat > "$SCRIPT" <<'EOS'
+          #!/bin/bash
+          # 한탕 데일리 리포트를 정시에 트리거한다(GitHub Actions cron 지연 우회).
+          HOME_DIR=/home/won3ho
+          ADMIN=1633958343
+          API="https://api.github.com/repos/won3ho-max/go/actions/workflows/daily_report.yml/dispatches"
+          PAT=$(cat "$HOME_DIR/.hantang_dispatch_pat")
+          CODE=""
+          for i in 1 2 3 4 5; do
+            CODE=$(curl -s -o /tmp/hantang_dispatch_out -w "%{http_code}" -X POST \
+              -H "Authorization: token $PAT" -H "Accept: application/vnd.github+json" \
+              "$API" -d '{"ref":"main","inputs":{"test_mode":"false"}}')
+            if [ "$CODE" = "204" ]; then
+              echo "$(date '+%F %T') dispatch OK (시도 $i)"
+              exit 0
+            fi
+            echo "$(date '+%F %T') dispatch 실패 code=$CODE $(cat /tmp/hantang_dispatch_out)"
+            sleep 60
+          done
+          TOKEN=$(cat "$HOME_DIR/.hantang_tg_token")
+          curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+            -d chat_id=$ADMIN \
+            --data-urlencode "text=⚠️ 데일리 자동 트리거 5회 실패 (마지막 code=$CODE). PAT 만료 여부를 확인하고 GitHub에서 수동 실행하세요."
+          exit 1
+          EOS
+          chmod +x "$SCRIPT"
+
+          # 월~금 07:00 KST
+          ( crontab -l 2>/dev/null | grep -v hantang_daily_dispatch;
+            echo "0 7 * * 1-5 $SCRIPT >> $HOME_DIR/hantang_dispatch.log 2>&1" ) | crontab -
+
+          echo "--- 설치 결과 ---"
+          timedatectl | head -3
+          crontab -l | grep hantang_daily_dispatch
+          echo "TIMER_INSTALLED_OK"
+          ENDSSH

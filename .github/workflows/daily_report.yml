@@ -1,9 +1,9 @@
 name: 한탕 스터디 데일리 리포트
 
 on:
-  schedule:
-    # 매일 오전 7시 KST = 전날 22:00 UTC (일~목 = 월~금 아침)
-    - cron: '0 22 * * 0-4'  # re-enable schedule
+  # schedule 제거 — GitHub Actions cron이 최대 3시간까지 밀린다
+  # (2026-08-07: 07:00 예정 → 10:30 시작). 정시 트리거는 GCP VM 크론이 맡는다.
+  # 설치/제거/점검: install_daily_timer.yml 워크플로 참조.
   workflow_dispatch:
     inputs:
       test_mode:
