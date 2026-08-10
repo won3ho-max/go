@@ -100,7 +100,11 @@ jobs:
 
           # cron 데몬 확보 (없으면 크론을 등록해도 안 돈다)
           command -v crontab >/dev/null || sudo apt-get install -y -qq cron
-          sudo systemctl enable --now cron >/dev/null 2>&1 || true
+          sudo systemctl enable cron >/dev/null 2>&1 || true
+          # cron은 기동 시점의 시간대를 물고 간다. timedatectl로 KST를 바꿔도
+          # 이미 떠 있던 데몬은 UTC로 계속 돌아 '0 7'을 16:00 KST로 해석한다.
+          # (2026-08-10 데일리 누락 원인) → 시간대 변경 뒤 반드시 재시작.
+          sudo systemctl restart cron
 
           # 월~금 07:00 KST.
           # `... | crontab -` 파이프는 bash -s(스크립트가 stdin)와 겹쳐 빈 크론탭이 만들어졌다.
