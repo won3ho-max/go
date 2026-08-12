@@ -1,0 +1,58 @@
+name: 시트 덤프(읽기 전용)
+
+# 임의 분기 시트를 그대로 읽어온다. 쓰기 동작은 전혀 없다.
+# 절대규칙 1(쓰기 전 읽기전용 확인)과 과거 분기 검증용.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet:
+        description: '시트 이름 일부(예: 2분기). 비우면 시트 목록만 출력'
+        required: false
+        type: string
+
+defaults:
+  run:
+    working-directory: hantang
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 패키지 설치
+        run: pip install --quiet gspread google-auth
+      - name: 덤프
+        env:
+          GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
+          GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
+          SHEET:               ${{ inputs.sheet }}
+        run: |
+          python - <<'PY'
+          import os, json, gspread
+          from google.oauth2.service_account import Credentials
+          SCOPES = ["https://spreadsheets.google.com/feeds",
+                    "https://www.googleapis.com/auth/drive"]
+          info = json.loads(os.environ["GSHEETS_CREDENTIALS"])
+          gc = gspread.authorize(Credentials.from_service_account_info(info, scopes=SCOPES))
+          ss = gc.open_by_key(os.environ["GSHEETS_ID"])
+          titles = [w.title for w in ss.worksheets()]
+          print("SHEETS:", json.dumps(titles, ensure_ascii=False))
+          key = (os.environ.get("SHEET") or "").strip()
+          if not key:
+              raise SystemExit(0)
+          hit = next((w for w in ss.worksheets() if key in w.title), None)
+          if hit is None:
+              print(f"[오류] '{key}' 를 포함하는 시트 없음")
+              raise SystemExit(1)
+          vals = hit.get_all_values()
+          print(f"TARGET: {hit.title} rows={len(vals)}")
+          print("DUMP_BEGIN")
+          for i, row in enumerate(vals, start=1):
+              if any(str(c).strip() for c in row):
+                  print(json.dumps([i] + row, ensure_ascii=False))
+          print("DUMP_END")
+          PY

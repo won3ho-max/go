@@ -1,0 +1,29 @@
+name: 운영자 텔레그램 전송
+
+# 운영자 개인 텔레그램(1633958343)으로만 보낸다. 본채널로는 보내지 않는다.
+# 분기 결산·검증 결과처럼 카드 밖의 내용을 전달할 때 쓴다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: '보낼 본문 (4000자 이내)'
+        required: true
+        type: string
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 전송
+        env:
+          TOKEN: ${{ secrets.HANTANG_TELEGRAM_TOKEN }}
+          TEXT:  ${{ inputs.text }}
+        run: |
+          CODE=$(curl -s -o /tmp/out -w "%{http_code}" -X POST \
+            "https://api.telegram.org/bot$TOKEN/sendMessage" \
+            -d chat_id=1633958343 \
+            --data-urlencode "text=$TEXT")
+          echo "http=$CODE"
+          cat /tmp/out
+          [ "$CODE" = "200" ]
