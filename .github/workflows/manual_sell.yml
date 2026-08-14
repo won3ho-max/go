@@ -16,9 +16,14 @@ on:
         required: true
         type: string
       sell_price:
-        description: '매도가 (숫자만)'
-        required: true
+        description: '매도가 (비우면 매도일 종가로 자동 산정)'
+        required: false
         type: string
+      dry_run:
+        description: '드라이런(읽기전용 확인만)'
+        required: false
+        default: true
+        type: boolean
 
 defaults:
   run:
@@ -44,5 +49,6 @@ jobs:
           SELL_PERSON:         ${{ inputs.person }}
           SELL_STOCK:          ${{ inputs.stock }}
           SELL_DATE:           ${{ inputs.sell_date }}
+          DRY_RUN:              ${{ inputs.dry_run }}
           SELL_PRICE:          ${{ inputs.sell_price }}
         run: python manual_sell.py

@@ -28,6 +28,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from pathlib import Path
 
+# 시세 로직은 update_gsheets 것을 그대로 쓴다(같은 규칙을 두 벌 두지 않기 위해).
+from update_gsheets import parse_stock, close_at, latest_close, last_completed_session
+
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
@@ -85,7 +88,40 @@ def find_person_blocks(all_values):
     return blocks
 
 
-def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: float):
+def _pending_add(ss, sheet_title, row, name, sell_date):
+    """매도가 미확정 건을 _pending_sell에 남겨 데일리가 매도일 종가로 확정하게 한다."""
+    try:
+        try:
+            wp = ss.worksheet("_pending_sell")
+        except gspread.WorksheetNotFound:
+            wp = ss.add_worksheet(title="_pending_sell", rows=200, cols=5)
+            wp.append_row(["sheet", "row", "stock", "sell_date"])
+        wp.append_row([sheet_title, str(row), name, str(sell_date)])
+        print(f"  [_pending_sell 등록] {sheet_title} P{row} {name} {sell_date}")
+    except Exception as e:
+        print(f"  [경고] _pending_sell 기록 실패: {e}")
+
+
+def resolve_sell_price(stock_label: str, sell_date_s: str):
+    """매도가 자동 산정. 반환: (가격, 확정여부, 설명)
+    매도일 장이 이미 끝났으면 그날 종가(절대규칙 5), 아직이면 현재가를 임시로 쓰고
+    데일리가 _pending_sell로 확정한다."""
+    market, code = parse_stock(stock_label)
+    if not market:
+        return None, False, f"종목 해석 실패: {stock_label}"
+    d = datetime.date.fromisoformat(sell_date_s[:10])
+    price = close_at(market, code, d)
+    if price is not None:
+        return price, True, f"{d} 종가 확정"
+    tmp = latest_close(market, code)
+    if tmp is None:
+        return None, False, f"{code} 시세 조회 실패"
+    return tmp, False, (f"{d} 장 미마감(마지막 완료 세션 "
+                        f"{last_completed_session(market)}) → 임시가, 데일리가 확정")
+
+
+def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: float,
+                dry_run: bool = False, pending: bool = False):
     ss = get_spreadsheet()
     sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
     ws = sheets[-1]
@@ -165,6 +201,14 @@ def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: f
 
     ret_pct = (sell_price - base_f) / base_f * 100
 
+    if dry_run:
+        print(f"\n[드라이런] {target_block['person']} / {orig_name}")
+        print(f"  J{stock_row} → 실현 P{p_row}")
+        print(f"  추천일 {rec_date} / 매도일 {sell_date}")
+        print(f"  기준가 {base_f:,.0f} → 매도가 {sell_price:,.0f} ({ret_pct:+.2f}%)")
+        print("  ※ 드라이런이므로 시트는 그대로입니다.")
+        return
+
     # 배치 업데이트
     updates = []
 
@@ -189,16 +233,33 @@ def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: f
     print(f"  매도가: {sell_price:,.0f}")
     print(f"  수익률: {ret_pct:+.2f}%")
 
+    if pending:
+        _pending_add(ss, ws.title, p_row, orig_name, sell_date)
+
 
 if __name__ == "__main__":
     person = os.environ.get("SELL_PERSON", "")
     stock = os.environ.get("SELL_STOCK", "")
     sell_date = os.environ.get("SELL_DATE", "")
-    sell_price_s = os.environ.get("SELL_PRICE", "")
+    sell_price_s = os.environ.get("SELL_PRICE", "").strip()
+    dry_run = os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "y")
 
-    if not all([person, stock, sell_date, sell_price_s]):
-        print("필수 환경변수: SELL_PERSON, SELL_STOCK, SELL_DATE, SELL_PRICE")
+    if not all([person, stock, sell_date]):
+        print("필수: SELL_PERSON, SELL_STOCK, SELL_DATE (SELL_PRICE는 비우면 자동 산정)")
         sys.exit(1)
 
-    sell_price = float(sell_price_s.replace(",", ""))
-    manual_sell(person, stock, sell_date, sell_price)
+    pending = False
+    if sell_price_s:
+        sell_price = float(sell_price_s.replace(",", ""))
+        print(f"[매도가] 입력값 {sell_price:,.0f}")
+    else:
+        # 시트에 적힌 종목명으로 시세를 찾는다. 매도가는 언제나 매도일 종가(절대규칙 5).
+        sell_price, fixed, note = resolve_sell_price(stock, sell_date)
+        if sell_price is None:
+            print(f"[오류] 매도가 자동 산정 실패 — {note}")
+            sys.exit(1)
+        pending = not fixed
+        print(f"[매도가] 자동 {sell_price:,.0f} ({note})")
+
+    print("모드: 드라이런(읽기전용)" if dry_run else "모드: 실제 기록")
+    manual_sell(person, stock, sell_date, sell_price, dry_run=dry_run, pending=pending)
