@@ -195,6 +195,24 @@ def find_active_dup(all_values, person_name, stock_name):
     return ""
 
 
+def active_holdings(all_values, person_name):
+    """해당 멤버가 현재 활성(J열)으로 들고 있는 종목명 목록(중복 제거)."""
+    blocks = find_person_blocks(all_values)
+    block = next((b for b in blocks
+                  if b["person"] == person_name or person_name in b["person"]), None)
+    if not block:
+        return []
+    out = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        j = (all_values[idx][9] if len(all_values[idx]) > 9 else "") or ""
+        if j.strip() and j.strip() not in out:
+            out.append(j.strip())
+    return out
+
+
 def add_stock(ws, all_values, person_name, stock_name, rec_date):
     blocks = find_person_blocks(all_values)
     block = next((b for b in blocks
@@ -430,8 +448,10 @@ def _pick(items, code: str = "", name: str = "", strict_foreign: bool = False):
                     elif not (a in b or b in a):
                         continue
                     # 후보가 종목명의 절반도 설명하지 못하면 우연한 부분일치로 본다.
-                    #   'SOL' → 'SOL AI반도체TOP2플러스' 같은 오탐 차단
-                    if len(a) * 2 < len(b):
+                    #   'SOL' → 'SOL AI반도체TOP2플러스' 같은 오탐 차단.
+                    # ADR은 예외 — 뒤이어 국내 상장분 대체 검증을 통과해야만 채택되므로
+                    # 오탐 위험이 낮고, 이 가드가 'SKT'→SK텔레콤 경로를 막고 있었다.
+                    if len(a) * 2 < len(b) and not _is_adr(nm):
                         continue
             if is_kr:
                 if kr is None or len(_norm(nm)) < len(_norm(kr[0])):
@@ -498,11 +518,21 @@ def _heuristic_names(text: str):
     return out
 
 
-def resolve_stock_llm(text: str):
+_llm_last_error = ""
+
+
+def resolve_stock_llm(text: str, holdings=None):
     """클로드로 종목 1개 추출.
-    반환: {'name_ko','name_en','ticker','market'} / {}(특정 불가) / None(호출 실패)"""
+    반환: {'name_ko','name_en','ticker','market'} / {}(특정 불가) / None(호출 실패)
+    실패 사유는 _llm_last_error에 남긴다 — '키 미설정'과 '크레딧 소진'을 구분해야
+    원인을 추적할 수 있다(2026-08-09~14 크레딧 소진을 키 문제로 오인)."""
+    global _llm_last_error
+    _llm_last_error = ""
     key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key or not text:
+    if not key:
+        _llm_last_error = "ANTHROPIC_API_KEY 미설정"
+        return None
+    if not text:
         return None
     prompt = (
         "다음은 주식 스터디 단톡방의 종목 추천/매도 메시지다. 언급된 대상 종목 1개를 식별해 "
@@ -514,17 +544,25 @@ def resolve_stock_llm(text: str):
         "미국 ADR(SKM·PKX·KB 등)은 원문이 명시적으로 미국 상장을 지목한 경우가 아니면 쓰지 않는다.\n"
         "- 모르는 항목은 빈 문자열.\n"
         '- 종목을 특정할 수 없으면 {"none":true} 만 출력.\n'
-        "- 설명·코드블록 없이 JSON만.\n\n"
-        "메시지:\n" + text[:1500]
+        "- 설명·코드블록 없이 JSON만.\n"
+        + (f"- 참고: 이 사람이 현재 보유 중인 종목은 {', '.join(holdings)} 이다. "
+           "매도 메시지라면 이 중에서 고른다.\n" if holdings else "")
+        + "\n메시지:\n" + text[:1500]
     )
     try:
-        r = requests.post(
+        resp = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
             json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200,
                   "messages": [{"role": "user", "content": prompt}]},
-            timeout=25).json()
+            timeout=25)
+        r = resp.json()
+        if resp.status_code != 200:
+            msg = ((r.get("error") or {}).get("message") or "")[:130]
+            _llm_last_error = f"HTTP {resp.status_code} {msg}"
+            log(f"[LLM오류] {_llm_last_error}")
+            return None
         ans = (r.get("content", [{}])[0].get("text", "") or "").strip()
         m = re.search(r"\{.*\}", ans, re.S)
         if not m:
@@ -539,17 +577,26 @@ def resolve_stock_llm(text: str):
         return None
 
 
-def resolve_stock(text: str):
+def resolve_stock(text: str, holdings=None):
     """종목 확정. 반환: (시트표기 문자열 or None, 판정근거 문자열)
 
-    후보 우선순위 — ① 원문에 거래소와 함께 적힌 티커 ② LLM 티커 ③ LLM 종목명(한/영)
-    ④ 원문 괄호 티커 ⑤ 앞 5줄 토큰. 모든 후보는 네이버 조회로 검증하며,
-    검증 실패 시 자동기록을 포기(fail-closed)한다.
+    후보 우선순위 — ① 보유 종목 직접 대조(매도 시) ② 원문 거래소표기 티커
+    ③ LLM 티커 ④ LLM 종목명(한/영) ⑤ 원문 괄호 티커 ⑥ 앞 5줄 토큰.
+    모든 후보는 네이버 조회로 검증하며, 실패 시 자동기록을 포기(fail-closed)한다.
+    holdings를 주면 매도 대상을 보유 종목으로 좁힌다.
     """
     if not text:
         return None, "빈 메시지"
 
     cands, notes = [], []
+
+    # ① 보유 종목이 원문에 그대로 등장하면 그게 가장 확실하다(매도 경로).
+    if holdings:
+        tn = _norm(text)
+        for hd in holdings:
+            _, base = _split_stock_label(hd)
+            if len(base) >= 2 and base in tn:
+                cands.append(("name", re.sub(r"\([^)]*\)\s*$", "", hd).strip(), "보유 종목 대조"))
 
     exch = sorted({m.group(1).upper() for m in _EXCH_TICKER_RE.finditer(text)})
     if len(exch) == 1:
@@ -557,9 +604,9 @@ def resolve_stock(text: str):
     elif len(exch) > 1:
         notes.append(f"원문 티커 후보 다수({','.join(exch)}) → 미사용")
 
-    info = resolve_stock_llm(text)
+    info = resolve_stock_llm(text, holdings=holdings)
     if info is None:
-        notes.append("LLM 추출 실패/키 미설정")
+        notes.append(f"LLM 실패({_llm_last_error or '원인 미상'})")
     elif not info:
         notes.append("LLM 판단: 종목 특정 불가")
     else:
@@ -713,14 +760,17 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"※ 멤버 매핑 안 됨 → 자동처리 안 함")
             log(f"[매도-미매핑] id={sid}")
             return
-        stock, why = resolve_stock(text)
+        # 매도는 보유 종목 중에서 고르는 일이므로 후보를 보유분으로 좁힌다.
+        ws, values = cache.ensure()
+        held = active_holdings(values, member)
+        stock, why = resolve_stock(text, holdings=held)
         if not stock:
             notify_admin(f"🔴 매도 감지 — {member}\n원문: {body}\n"
                          f"※ 종목명 자동인식 실패 → 자동처리 안 함(수동 확정 필요)\n"
-                         f"사유: {why}")
+                         f"사유: {why}\n"
+                         f"보유 중: {', '.join(held) if held else '없음'}")
             log(f"[매도-미인식] {member}: {why}")
             return
-        ws, values = cache.ensure()
         ok, result = sell_stock(ws, values, member, stock, today_kst(), cache)
         if ok:
             cache.refresh()
