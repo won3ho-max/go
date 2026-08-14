@@ -130,6 +130,51 @@ def fetch_price(market: str, code: str, date: datetime.date | None = None) -> fl
         return None
 
 
+_kr_close_cache: dict = {}
+
+def _naver_kr_closes(code: str) -> dict:
+    """국내 종목 일별 종가 {date: close}. 네이버에서 가져온다.
+
+    야후는 국내 일봉을 늦게 올린다. 2026-08-14 07:00 데일리에서 국내 18종목
+    전건이 8/13이 아닌 8/12 종가로 들어갔고, 같은 시각 네이버에는 8/13이
+    정상 존재했다. 시장지표에서 겪은 결측과 같은 문제라 소스를 바꾼다.
+    pageSize 최대 60 → 2페이지(약 120거래일)면 직전분기까지 커버된다."""
+    if code in _kr_close_cache:
+        return _kr_close_cache[code]
+    out = {}
+    try:
+        for page in (1, 2):
+            rows = requests.get(
+                f"https://m.stock.naver.com/api/stock/{code}/price",
+                params={"pageSize": 60, "page": page},
+                headers={"User-Agent": "Mozilla/5.0",
+                         "Referer": "https://m.stock.naver.com/"},
+                timeout=8).json()
+            if not isinstance(rows, list) or not rows:
+                break
+            for r in rows:
+                d = str(r.get("localTradedAt", ""))[:10]
+                try:
+                    out[datetime.date.fromisoformat(d)] = \
+                        float(str(r.get("closePrice", "")).replace(",", ""))
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"    [네이버 시세 실패] {code}: {e}")
+    _kr_close_cache[code] = out
+    return out
+
+
+def close_at(market: str, code: str, date: datetime.date):
+    """지정일 종가(휴장이면 직전 거래일). 아직 장이 안 끝난 날짜면 None.
+
+    기준가 산정용. 기존 fetch_price(date)는 start=date의 iloc[0]이라
+    그날 시세가 없으면 '다음 거래일' 종가를 집었다(2026-06-03 라이콤 건)."""
+    if date > last_completed_session(market):
+        return None
+    return close_on_or_before(market, code, date)
+
+
 _last_close_cache: dict = {}
 
 def last_completed_session(market: str) -> datetime.date:
@@ -446,7 +491,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                 continue
 
             # 매 실행마다 기준가=추천일 종가 검증, 현재가=실행 시점 가격
-            correct_base = fetch_price(market, code, rec_date)
+            correct_base = close_at(market, code, rec_date)
             cur_price_now = latest_close(market, code)
 
             if correct_base:
@@ -488,7 +533,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                     print(f"    [오류] {person} P열 빈 행 없음")
                     continue
 
-                sell_price = fetch_price(market, code, sell_date)
+                sell_price = close_at(market, code, sell_date)
                 if sell_price is None:
                     sell_price = fetch_price(market, code)
                 if sell_price is None:
@@ -789,7 +834,7 @@ def fix_realized_sell_dates(ws: gspread.Worksheet, today: datetime.date):
                 continue  # 종가 미확정 날짜는 수정하지 않음
 
             # 새 매도일 종가 조회
-            new_price = fetch_price(market, code, new_sell)
+            new_price = close_at(market, code, new_sell)
             if new_price is None:
                 new_price = fetch_price(market, code)
             if new_price is None:
@@ -893,6 +938,13 @@ def close_on_or_before(market: str, code: str, date: datetime.date, with_date: b
     fetch_price(date)는 다음 거래일 종가를 집어오므로 매도가 확정엔 이 함수를 쓸 것.
     with_date=True면 (종가, 그 종가의 날짜) 튜플을 준다."""
     fail = (None, None) if with_date else None
+    # 국내는 네이버 일별시세 우선(야후 국내 일봉 지연 회피). 실패 시 야후 폴백.
+    if market == "KR":
+        ser = _naver_kr_closes(code)
+        days = sorted(d for d in ser if d <= date)
+        if days:
+            val = round(ser[days[-1]])
+            return (val, days[-1]) if with_date else val
     try:
         if market == "KR":
             suffix = ".KQ" if code in KOSDAQ_CODES else ".KS"
