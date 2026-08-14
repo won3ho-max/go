@@ -1,0 +1,55 @@
+name: 리스너 진단(읽기 전용)
+
+# 리스너가 종목 인식에 실패할 때 원인을 좁힌다. 키 값은 절대 출력하지 않고
+# 길이와 API 응답 코드만 남긴다.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH key setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 34.57.78.164 >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: 진단
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no won3ho@34.57.78.164 'bash -s' << 'ENDSSH'
+          echo "--- 서비스 상태 ---"
+          systemctl is-active hantang_listener; systemctl show hantang_listener -p ActiveEnterTimestamp
+
+          echo "--- 유닛에 등록된 환경변수(값 아닌 존재/길이만) ---"
+          for k in TELEGRAM_TOKEN GSHEETS_ID ADMIN_CHAT_ID ANTHROPIC_API_KEY; do
+            V=$(systemctl show hantang_listener -p Environment | tr ' ' '\n' | grep "^$k=" | head -1 | cut -d= -f2-)
+            if [ -z "$V" ]; then echo "  $k : (없음)"; else echo "  $k : 길이 ${#V}, 앞 8자 ${V:0:8}…"; fi
+          done
+
+          echo "--- 실제 프로세스가 들고 있는 값 ---"
+          PID=$(systemctl show hantang_listener -p MainPID --value)
+          if [ -n "$PID" ] && [ "$PID" != "0" ]; then
+            A=$(sudo tr '\0' '\n' < /proc/$PID/environ | grep '^ANTHROPIC_API_KEY=' | cut -d= -f2-)
+            if [ -z "$A" ]; then echo "  프로세스에 ANTHROPIC_API_KEY 없음"; else echo "  프로세스 키 길이 ${#A}, 앞 8자 ${A:0:8}…"; fi
+          else
+            echo "  MainPID 없음"; A=""
+          fi
+
+          echo "--- Anthropic API 호출 테스트 ---"
+          if [ -n "$A" ]; then
+            CODE=$(curl -s -o /tmp/anth_out -w "%{http_code}" https://api.anthropic.com/v1/messages \
+              -H "x-api-key: $A" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+              -d '{"model":"claude-haiku-4-5-20251001","max_tokens":8,"messages":[{"role":"user","content":"ping"}]}')
+            echo "  http=$CODE"
+            head -c 400 /tmp/anth_out; echo
+            rm -f /tmp/anth_out
+          else
+            echo "  (키가 없어 테스트 생략)"
+          fi
+
+          echo "--- 네이버 도달 여부 ---"
+          curl -s -o /dev/null -w "  ac.stock.naver.com http=%{http_code}\n" "https://ac.stock.naver.com/ac?q=SKT&target=stock"
+          ENDSSH
