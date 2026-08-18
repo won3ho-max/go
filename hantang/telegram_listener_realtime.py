@@ -233,7 +233,8 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date):
     cell_k = ws.cell(empty_row, 11)
     cell_j.value = stock_name
     cell_k.value = str(rec_date)
-    ws.update_cells([cell_j, cell_k], value_input_option="USER_ENTERED")
+    sheet_retry(lambda: ws.update_cells([cell_j, cell_k],
+                                        value_input_option="USER_ENTERED"), "매수 기록")
     return True, f"{person_name} / {stock_name} 기록 완료 (기준가는 오늘 장 마감 후 자동입력)"
 
 
@@ -307,7 +308,7 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache):
     except Exception:
         price = base_f
 
-    ws.batch_update([
+    sheet_retry(lambda: ws.batch_update([
         {"range": f"P{p_row}", "values": [[orig]]},
         {"range": f"Q{p_row}", "values": [[rec_date]]},
         {"range": f"R{p_row}", "values": [[str(sell_date)]]},
@@ -315,7 +316,7 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache):
         {"range": f"T{p_row}", "values": [[price]]},
         {"range": f"U{p_row}", "values": [[f"=(T{p_row}-S{p_row})/S{p_row}"]]},
         {"range": f"J{stock_row}:N{stock_row}", "values": [["", "", "", "", ""]]},
-    ], value_input_option="USER_ENTERED")
+    ], value_input_option="USER_ENTERED"), "매도 기록")
 
     _pending_add(cache, ws.title, p_row, orig, sell_date)
     ret = (price - base_f) / base_f * 100 if base_f else 0.0
@@ -675,6 +676,26 @@ def today_kst():
 
 
 # ── 처리 ──────────────────────────────────────────────────────────────────
+def sheet_retry(fn, what="시트 작업", tries=4):
+    """구글 시트 API의 일시 장애(5xx)를 재시도한다.
+
+    2026-08-18 11:07 '메시지 처리 오류: APIError: [503]'로 메시지 한 건이
+    통째로 유실됐다. 503/500/502/504는 대개 수 초 뒤 정상화되므로 즉시 포기하지
+    않는다. 권한·범위 오류 같은 4xx는 재시도해도 소용없으니 바로 올린다."""
+    delay = 2
+    for i in range(1, tries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            transient = any(c in str(e) for c in ("[500]", "[502]", "[503]", "[504]",
+                                                  "Read timed out", "Connection aborted"))
+            if not transient or i == tries:
+                raise
+            log(f"[재시도 {i}/{tries - 1}] {what}: {e}")
+            time.sleep(delay)
+            delay *= 2
+
+
 class SheetCache:
     def __init__(self):
         self.ss = None
@@ -692,12 +713,12 @@ class SheetCache:
             self.ss = open_spreadsheet()
             self.ws = get_worksheet(self.ss)
         if self.values is None or (time.time() - self.loaded_at) > SHEET_TTL:
-            self.values = self.ws.get_all_values()
+            self.values = sheet_retry(self.ws.get_all_values, "시트 읽기")
             self.loaded_at = time.time()
         return self.ws, self.values
 
     def refresh(self):
-        self.values = self.ws.get_all_values()
+        self.values = sheet_retry(self.ws.get_all_values, "시트 재읽기")
         self.loaded_at = time.time()
 
 
@@ -854,8 +875,16 @@ def main():
                 try:
                     handle_message(msg, cache)
                 except Exception as e:
-                    log(f"[오류] handle_message: {e}")
-                    notify_admin(f"⚠️ 메시지 처리 오류: {e}")
+                    # 실패한 메시지의 내용을 반드시 남긴다. 예전엔 오류만 찍혀
+                    # 무엇이 유실됐는지 알 수 없었다(2026-08-18 11:07 503 건).
+                    frm = msg.get("from") or {}
+                    who = MEMBER_MAP.get(frm.get("id")) or \
+                        f"미매핑(id={frm.get('id')}, {frm.get('first_name', '')})"
+                    body = (msg.get("text", "") or msg.get("caption", "") or
+                            "").strip().replace("\n", " ")[:200]
+                    log(f"[오류] handle_message: {e} | {who} | {body}")
+                    notify_admin(f"⚠️ 메시지 처리 오류 — {who}\n원문: {body}\n"
+                                 f"오류: {e}\n※ 이 건은 기록되지 않았습니다. 수동 확인 필요")
             if updates:
                 save_offset(offset)
         except requests.exceptions.RequestException as e:
