@@ -44,10 +44,14 @@ jobs:
           key = (os.environ.get("SHEET") or "").strip()
           if not key:
               raise SystemExit(0)
-          hit = next((w for w in ss.worksheets() if key in w.title), None)
-          if hit is None:
+          hits = [w for w in ss.worksheets() if key in w.title]
+          if not hits:
               print(f"[오류] '{key}' 를 포함하는 시트 없음")
               raise SystemExit(1)
+          if len(hits) > 1:
+              # '3분기'는 25년·26년 시트에 모두 걸린다. 가장 뒤(최신)를 쓰되 알린다.
+              print(f"[주의] 후보 다수: {[w.title for w in hits]} → 마지막 것을 사용")
+          hit = hits[-1]
           vals = hit.get_all_values()
           print(f"TARGET: {hit.title} rows={len(vals)}")
           print("DUMP_BEGIN")
