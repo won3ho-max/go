@@ -51,10 +51,14 @@ def find_person_blocks(all_values):
     return blocks
 
 
+_HEDGE_SUFFIX = re.compile(r"\(\s*(?:H|UH|합성|합성\s*H|환헤지|언헤지)\s*\)\s*$", re.I)
+
+
 def _split_label(label):
-    """'코히런트(COHR)' → ('COHR', '코히런트'). 표기 흔들림을 흡수한 비교용."""
+    """'코히런트(COHR)' → ('COHR', '코히런트'). 표기 흔들림을 흡수한 비교용.
+    '(H)' 등 환헤지 표기는 티커가 아니다(정방향/인버스가 같은 코드로 잡히던 문제)."""
     s = str(label or "").strip()
-    m = re.search(r"\(([A-Za-z0-9]{1,7})\)\s*$", s)
+    m = None if _HEDGE_SUFFIX.search(s) else re.search(r"\(([A-Za-z0-9]{2,7})\)\s*$", s)
     code = m.group(1).upper() if m else ""
     base = re.sub(r"[\s\(\)\[\]{}·\-_/\.]", "",
                   re.sub(r"\([^)]*\)\s*$", "", s)).upper()

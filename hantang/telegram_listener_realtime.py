@@ -376,10 +376,16 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s\(\)\[\]{}·\-_/\.]", "", s or "").upper()
 
 
+# 국내 ETF 환헤지 표기. 티커가 아니다.
+_HEDGE_SUFFIX = re.compile(r"\(\s*(?:H|UH|합성|합성\s*H|환헤지|언헤지)\s*\)\s*$", re.I)
+
+
 def _split_stock_label(label: str):
-    """'코히런트(COHR)' → ('COHR', '코히런트'). 괄호 티커가 없으면 코드는 ''."""
+    """'코히런트(COHR)' → ('COHR', '코히런트'). 괄호 티커가 없으면 코드는 ''.
+    '(H)' 같은 환헤지 표기는 티커로 보지 않는다 — 'KODEX WTI원유선물(H)'와
+    'KODEX WTI원유선물인버스(H)'가 둘 다 코드 'H'로 잡혀 같은 종목 취급됐다."""
     s = str(label or "").strip()
-    m = re.search(r"\(([A-Za-z0-9]{1,7})\)\s*$", s)
+    m = None if _HEDGE_SUFFIX.search(s) else re.search(r"\(([A-Za-z0-9]{2,7})\)\s*$", s)
     code = m.group(1).upper() if m else ""
     base = _norm(re.sub(r"\([^)]*\)\s*$", "", s))
     return code, base

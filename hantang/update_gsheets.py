@@ -351,10 +351,17 @@ def normalize_name(name: str) -> str:
     return clean  # 검색 실패 시 원본 유지
 
 
+# 국내 ETF의 환헤지 표기. 티커가 아니다.
+_HEDGE_SUFFIX = re.compile(r"\(\s*(?:H|UH|합성|합성\s*H|환헤지|언헤지)\s*\)\s*$", re.I)
+
+
 def parse_stock(name: str):
     name = str(name).strip()
-    m = re.search(r"\(([A-Z]{1,5})\)\s*$", name)
-    if m: return "US", m.group(1)
+    # 'KODEX WTI원유선물(H)'가 US 티커 'H'(하얏트)로 잡혀 178달러가 현재가로
+    # 들어갔다(2026-08-19). 1글자 티커는 오탐이 커서 US 인식에서 뺀다.
+    if not _HEDGE_SUFFIX.search(name):
+        m = re.search(r"\(([A-Z]{2,5})\)\s*$", name)
+        if m: return "US", m.group(1)
     m = re.search(r"\(([A-Z0-9]{5,7})\)\s*$", name)
     if m: return "KR", m.group(1)
     if name in KOREAN_CODES: return "KR", KOREAN_CODES[name]
@@ -374,6 +381,24 @@ def prev_trading_day(target: datetime.date, market: str) -> datetime.date:
     ts   = pd.Timestamp(target)
     sess = cal.sessions_in_range(ts - pd.Timedelta(days=14), ts)
     return sess[-1].date() if len(sess) > 0 else target
+
+_round_cache: dict = {}
+
+def round_day(d: datetime.date) -> datetime.date:
+    """그 주(월~일)의 첫 국내 거래일. 주간 라운드 기준일.
+    월요일이 휴장이면 화요일이 그 주 라운드가 된다."""
+    monday = d - datetime.timedelta(days=d.weekday())
+    if monday in _round_cache:
+        return _round_cache[monday]
+    try:
+        sess = _cal("KR").sessions_in_range(pd.Timestamp(monday),
+                                            pd.Timestamp(monday + datetime.timedelta(days=6)))
+        out = sess[0].date() if len(sess) > 0 else monday
+    except Exception:
+        out = monday
+    _round_cache[monday] = out
+    return out
+
 
 def calc_sell_date(rec_date: datetime.date, market: str) -> datetime.date:
     # 추천일+1달 미만의 마지막 거래일 (1달 되는 날 제외)
@@ -1018,10 +1043,13 @@ def fix_pending_sells(ss, today: datetime.date):
 
 
 def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime.date):
-    """당일(월요일 라운드) 미추천자에게 -10% 패널티 자동 부여.
-    규칙: 시트에 존재하는 '월요일' 추천일 중 D<today 인 라운드마다,
-          그날 활성/실현 추천이 없는 멤버에게 실현섹션에 -10%(S=100,T=90) 기록.
-          이미 그 날짜의 미추천 패널티가 있으면 건너뜀(중복 방지)."""
+    """주간 라운드 미추천자에게 -10% 패널티 자동 부여.
+    규칙: 시트에 존재하는 추천일을 주 단위로 묶어 '그 주 첫 거래일'을 라운드로 보고,
+          D<today 인 라운드마다 그날 활성/실현 추천이 없는 멤버에게
+          실현섹션에 -10%(S=100,T=90) 기록. 이미 있으면 건너뜀(중복 방지).
+
+    월요일로 못박아뒀더니 2026-08-17(광복절 대체공휴일)처럼 월요일이 휴장이면
+    라운드 자체가 인식되지 않아 8/18 화요일 라운드의 패널티가 통째로 누락됐다."""
     def is_pen(p): return "미추천" in str(p) or "패널티" in str(p)
 
     vals = ws.get_all_values()
@@ -1041,7 +1069,7 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                     continue
                 try:
                     dd = datetime.date.fromisoformat(str(d).strip()[:10])
-                    if dd.weekday() == 0 and dd < today:
+                    if dd == round_day(dd) and dd < today:
                         round_days.add(dd)
                 except Exception:
                     pass
