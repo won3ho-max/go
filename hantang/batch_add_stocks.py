@@ -15,6 +15,9 @@ import os, re, sys, json, datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
+# 시세 로직은 update_gsheets 것을 그대로 쓴다(규칙을 두 벌 두지 않기 위해).
+from update_gsheets import parse_stock, close_at
+
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
@@ -271,6 +274,77 @@ def remove_penalty(ws, all_values, person_name, date_str, dry_run=False):
     return True, f"P{row}:U{row} {date_str}자 미추천 패널티 삭제 완료"
 
 
+def refix_realized(ws, all_values, person_name, stock_name, dry_run=False):
+    """실현 행의 기준가(S)·매도가(T)를 추천일/매도일 종가로 재계산한다.
+
+    절대규칙 4는 실현 기록의 '자동' 덮어쓰기를 금지한다. 이 함수는 자동이 아니라
+    명시적 지시로만 도는 교정 도구다. 종목 오분류로 엉뚱한 시세가 박힌 건을
+    되돌리기 위해 만들었다(2026-08 KODEX WTI원유선물(H)가 US 티커 H로 잡힌 건)."""
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    if dry_run:
+        describe_block(all_values, block)
+
+    targets = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        p = row[15] if len(row) > 15 else ""
+        if p and p.strip() != "미추천(패널티)" and _same_stock(p, stock_name):
+            targets.append((r, p, row[16] if len(row) > 16 else "",
+                            row[17] if len(row) > 17 else "",
+                            row[18] if len(row) > 18 else "",
+                            row[19] if len(row) > 19 else ""))
+    if not targets:
+        return False, f"'{person_name}' 실현 기록에서 '{stock_name}'을 찾을 수 없음"
+    if len(targets) > 1:
+        return False, (f"'{stock_name}' 실현 후보 다수 → " +
+                       ", ".join(f"P{r}(추천일 {q})" for r, _, q, _, _, _ in targets) +
+                       " (수동 처리 필요)")
+
+    row, name, q, rr, s_old, t_old = targets[0]
+    market, code = parse_stock(name)
+    if not market:
+        return False, f"종목 해석 실패: {name}"
+    try:
+        rec_d = datetime.date.fromisoformat(str(q).strip()[:10])
+        sell_d = datetime.date.fromisoformat(str(rr).strip()[:10])
+    except Exception:
+        return False, f"날짜 파싱 실패: 추천일 {q!r} 매도일 {rr!r}"
+
+    s_new = close_at(market, code, rec_d)
+    t_new = close_at(market, code, sell_d)
+    if s_new is None or t_new is None:
+        return False, f"시세 조회 실패 (기준가 {s_new}, 매도가 {t_new})"
+
+    def pct(a, b):
+        try:
+            return f"{(float(b) - float(a)) / float(a) * 100:+.2f}%"
+        except Exception:
+            return "?"
+
+    msg = (f"P{row} '{name}' ({market}/{code})\n"
+           f"    기준가 {s_old} → {s_new:,}  |  매도가 {t_old} → {t_new:,}\n"
+           f"    수익률 {pct(s_old, t_old)} → {pct(s_new, t_new)}")
+    if dry_run:
+        return True, "[드라이런] " + msg + "\n    ※ 시트는 그대로입니다."
+
+    ws.batch_update([
+        {"range": f"S{row}", "values": [[s_new]]},
+        {"range": f"T{row}", "values": [[t_new]]},
+        {"range": f"U{row}", "values": [[f"=(T{row}-S{row})/S{row}"]]},
+    ], value_input_option="USER_ENTERED")
+    return True, "교정 완료 " + msg
+
+
 def _flag(name):
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "y")
 
@@ -280,12 +354,13 @@ def run():
     rename_raw = os.environ.get("RENAME", "")
     remove_raw = os.environ.get("REMOVE", "")
     penalty_raw = os.environ.get("RM_PENALTY", "")
+    refix_raw = os.environ.get("REFIX", "")
     rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
     dry_run = _flag("DRY_RUN")
     allow_dup = _flag("ALLOW_DUP")
 
-    if not (stocks_raw or rename_raw or remove_raw or penalty_raw):
-        print("[오류] STOCKS / RENAME / REMOVE / RM_PENALTY 중 하나는 필요")
+    if not (stocks_raw or rename_raw or remove_raw or penalty_raw or refix_raw):
+        print("[오류] STOCKS / RENAME / REMOVE / RM_PENALTY / REFIX 중 하나는 필요")
         sys.exit(1)
 
     pairs = [s.strip().split(":", 1) for s in stocks_raw.split(",") if ":" in s]
@@ -310,6 +385,18 @@ def run():
     fails = 0
     for person, old, new in renames:
         ok, msg = rename_stock(ws, all_vals, person, old, new, dry_run=dry_run)
+        print(f"  {'✅' if ok else '❌'} {msg}\n")
+        if not ok:
+            fails += 1
+        if ok and not dry_run:
+            all_vals = ws.get_all_values()
+
+    for s3 in refix_raw.split(","):
+        s3 = s3.strip()
+        if ":" not in s3:
+            continue
+        person, stk = s3.split(":", 1)
+        ok, msg = refix_realized(ws, all_vals, person.strip(), stk.strip(), dry_run=dry_run)
         print(f"  {'✅' if ok else '❌'} {msg}\n")
         if not ok:
             fails += 1
