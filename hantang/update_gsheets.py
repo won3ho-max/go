@@ -15,7 +15,7 @@ GitHub Actions에서 로컬 컴퓨터 없이 실행 가능
   GSHEETS_ID           - 스프레드시트 ID
 """
 
-import os, sys, re, json, datetime, subprocess, math
+import os, sys, re, json, time, datetime, subprocess, math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def _ensure(pkg, import_name=None):
@@ -86,6 +86,28 @@ def get_spreadsheet() -> gspread.Spreadsheet:
     if not sheet_id:
         raise ValueError("GSHEETS_ID 환경변수 또는 gsheets_id.txt 필요")
     return get_client().open_by_key(sheet_id)
+
+# ── 구글시트 호출 재시도 ─────────────────────────────────────────────────
+def sheet_retry(fn, what="시트 작업", tries=5):
+    """구글 시트 API의 일시 장애(5xx)와 분당 쿼터 초과(429)를 재시도한다.
+
+    2026-08-21 데일리는 429('Read requests per minute'), 08-24는 503으로 통째로
+    죽어 카드가 이틀 안 나갔다. 429는 분당 창이 열려야 하므로 5xx보다 길게 쉰다."""
+    for i in range(1, tries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            msg = str(e)
+            quota = "[429]" in msg or "Quota exceeded" in msg
+            transient = quota or any(c in msg for c in
+                                     ("[500]", "[502]", "[503]", "[504]",
+                                      "Read timed out", "Connection aborted"))
+            if not transient or i == tries:
+                raise
+            delay = (20, 40, 60, 60)[min(i - 1, 3)] if quota else (3, 6, 12, 20)[min(i - 1, 3)]
+            print(f"    [재시도 {i}/{tries - 1}] {what}: {msg[:110]} → {delay}s 대기")
+            time.sleep(delay)
+
 
 # ── 주가 조회 (Yahoo Finance) ────────────────────────────────────────────
 _yf_cache: dict = {}
@@ -440,7 +462,7 @@ def find_person_blocks(all_values: list) -> list:
 # ── 시트 처리 ────────────────────────────────────────────────────────────
 def process_sheet(ws: gspread.Worksheet, today: datetime.date):
     print(f"  데이터 로드 중...")
-    all_values = ws.get_all_values()
+    all_values = sheet_retry(ws.get_all_values, "시트 읽기")
 
     blocks   = find_person_blocks(all_values)
     updates  = []   # (row, col, value) 배치 업데이트용
@@ -597,7 +619,7 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
         for row_1, col_1, val in updates:
             c = gspread.Cell(row=row_1, col=col_1, value=val)
             cell_list.append(c)
-        ws.update_cells(cell_list, value_input_option="USER_ENTERED")
+        sheet_retry(lambda: ws.update_cells(cell_list, value_input_option="USER_ENTERED"), "셀 갱신")
 
     return updated, sold, skipped
 
@@ -669,7 +691,7 @@ def process_pending(ws: gspread.Worksheet, all_values: list, today: datetime.dat
         for row_1, col_1, val in updates:
             c = gspread.Cell(row=row_1, col=col_1, value=val)
             cell_list.append(c)
-        ws.update_cells(cell_list, value_input_option="USER_ENTERED")
+        sheet_retry(lambda: ws.update_cells(cell_list, value_input_option="USER_ENTERED"), "셀 갱신")
         pending_path.write_text("[]", encoding="utf-8")
         print(f"  pending_stocks.json 초기화 완료")
 
@@ -810,7 +832,7 @@ def fix_realized_sell_dates(ws: gspread.Worksheet, today: datetime.date):
 
     수동 매도 건은 건드리지 않음 (기존 공식 결과와 다른 날짜면 수동으로 판단)
     """
-    all_values = ws.get_all_values()
+    all_values = sheet_retry(ws.get_all_values, "시트 읽기")
     blocks = find_person_blocks(all_values)
     updates = []
     fixed = []
@@ -875,7 +897,7 @@ def fix_realized_sell_dates(ws: gspread.Worksheet, today: datetime.date):
             print(f"    [소급수정] {person}/{p_name}: {cur_sell} → {new_sell}, 매도가={new_price:,}")
 
     if updates:
-        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        sheet_retry(lambda: ws.batch_update(updates, value_input_option="USER_ENTERED"), "일괄 갱신")
         print(f"  소급 수정 완료: {len(fixed)}건")
     else:
         print(f"  소급 수정 대상 없음")
@@ -889,7 +911,7 @@ def verify_realized_prices(ws: gspread.Worksheet, today: datetime.date):
     실현(매도) 종목의 매도가(T열)가 매도일(R열) 종가와 일치하는지 검증.
     5% 이상 차이나면 Yahoo 종가로 수정한다.
     """
-    all_values = ws.get_all_values()
+    all_values = sheet_retry(ws.get_all_values, "시트 읽기")
     blocks = find_person_blocks(all_values)
     updates = []
     fixed = []
@@ -1003,7 +1025,7 @@ def fix_pending_sells(ss, today: datetime.date):
         wp = ss.worksheet("_pending_sell")
     except gspread.WorksheetNotFound:
         return []
-    rows = wp.get_all_values()
+    rows = sheet_retry(wp.get_all_values, "시트 읽기")
     if len(rows) < 2:
         return []
 
@@ -1031,14 +1053,14 @@ def fix_pending_sells(ss, today: datetime.date):
         if correct is None:
             keep.append(r)          # 조회 실패 → 다음 실행에 재시도
             continue
-        ws2.batch_update([
+        sheet_retry(lambda: ws2.batch_update([
             {"range": f"T{row_i}", "values": [[correct]]},
             {"range": f"U{row_i}", "values": [[f"=(T{row_i}-S{row_i})/S{row_i}"]]},
-        ], value_input_option="USER_ENTERED")
+        ], value_input_option="USER_ENTERED"), "매도가 확정")
         fixed.append(f"{name} {title} R{row_i} 매도가 → {correct:,} ({sell_date} 종가 확정)")
 
     wp.clear()
-    wp.append_rows([header] + keep)
+    sheet_retry(lambda: wp.append_rows([header] + keep), "_pending_sell 갱신")
     return fixed
 
 
@@ -1052,7 +1074,7 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
     라운드 자체가 인식되지 않아 8/18 화요일 라운드의 패널티가 통째로 누락됐다."""
     def is_pen(p): return "미추천" in str(p) or "패널티" in str(p)
 
-    vals = ws.get_all_values()
+    vals = sheet_retry(ws.get_all_values, "시트 읽기")
     blocks = find_person_blocks(vals)
 
     # 라운드 = 데이터에 존재하는 '월요일' 추천일(패널티 제외), 오늘보다 이전
@@ -1083,7 +1105,9 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                 continue
             recommended = has_penalty = False
             empty_p = None
-            vals = ws.get_all_values()   # 매 멤버 최신 상태 (앞서 쓴 패널티 반영)
+            # 예전엔 멤버마다 시트를 통째로 다시 읽었다. 라운드가 쌓이면서
+            # (라운드 수 × 8명) 읽기가 분당 쿼터를 넘겨 2026-08-21 데일리가
+            # 429로 죽었다. 이제 한 번만 읽고 쓴 내용은 로컬에 반영한다.
             for r in range(b["row_start"], b["row_end"] + 1):
                 if r - 1 >= len(vals):
                     break
@@ -1103,21 +1127,27 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
             if recommended or has_penalty or empty_p is None:
                 continue
             pr = empty_p
-            ws.batch_update([
+            sheet_retry(lambda: ws.batch_update([
                 {"range": f"P{pr}", "values": [["미추천(패널티)"]]},
                 {"range": f"Q{pr}", "values": [[Ds]]},
                 {"range": f"R{pr}", "values": [[Ds]]},
                 {"range": f"S{pr}", "values": [[100]]},
                 {"range": f"T{pr}", "values": [[90]]},
                 {"range": f"U{pr}", "values": [[f"=(T{pr}-S{pr})/S{pr}"]]},
-            ], value_input_option="USER_ENTERED")
+            ], value_input_option="USER_ENTERED"), "패널티 기록")
+            # 방금 쓴 행을 로컬 vals에 반영 → 다음 라운드 판정에 그대로 쓴다
+            row_local = vals[pr - 1]
+            while len(row_local) < 21:
+                row_local.append("")
+            row_local[15], row_local[16], row_local[17] = "미추천(패널티)", Ds, Ds
+            row_local[18], row_local[19] = "100", "90"
             applied.append(f"{person} {Ds} 미추천 -10% (실현 R{pr})")
     return applied
 
 
 def has_active_positions(ws: gspread.Worksheet) -> bool:
     """활성(미매도) 종목이 J열에 하나라도 있으면 True."""
-    vals = ws.get_all_values()
+    vals = sheet_retry(ws.get_all_values, "시트 읽기")
     for b in find_person_blocks(vals):
         for r in range(b["row_start"], b["row_end"] + 1):
             if r - 1 < len(vals):
@@ -1130,13 +1160,13 @@ def has_active_positions(ws: gspread.Worksheet) -> bool:
 def process_quarter(ws: gspread.Worksheet, today: datetime.date, is_current: bool):
     """한 분기 시트 처리: (현재 분기만 pending 추가) 현재가·자동매도·검증·portfolio·카드/텔레그램."""
     print(f"\n[시트] {ws.title}  (current={is_current})")
-    all_values = ws.get_all_values()
+    all_values = sheet_retry(ws.get_all_values, "시트 읽기")
 
     # 1. 대기 종목 추가 (현재 분기 한정)
     if is_current:
         added = process_pending(ws, all_values, today)
         if added:
-            all_values = ws.get_all_values()
+            all_values = sheet_retry(ws.get_all_values, "시트 읽기")
 
     # 2. 현재가 업데이트 + 자동 매도
     updated, sold, skipped = process_sheet(ws, today)
@@ -1153,7 +1183,7 @@ def process_quarter(ws: gspread.Worksheet, today: datetime.date, is_current: boo
         print(f"    · {pf}")
 
     # 4. portfolio.json 내보내기 + 카드/텔레그램
-    all_values = ws.get_all_values()
+    all_values = sheet_retry(ws.get_all_values, "시트 읽기")
     export_portfolio_json(all_values, ws.title, today)
     run_card_and_telegram(today)
 

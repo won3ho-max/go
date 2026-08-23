@@ -41,3 +41,14 @@ jobs:
           TELEGRAM_TOKEN:      ${{ secrets.HANTANG_TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ inputs.test_mode == true && '1633958343' || secrets.TELEGRAM_CHAT_ID }}
         run: python update_gsheets.py
+
+      - name: 실패 알림
+        if: failure()
+        env:
+          TOKEN: ${{ secrets.HANTANG_TELEGRAM_TOKEN }}
+        run: |
+          # 데일리가 죽으면 카드가 안 나가는데 아무도 모른다(2026-08-21·24 이틀 누락).
+          curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+            -d chat_id=1633958343 \
+            --data-urlencode "text=🚨 데일리 리포트 실패 — 카드가 발송되지 않았습니다.
+          실행 로그: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
