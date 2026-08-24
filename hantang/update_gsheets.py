@@ -377,6 +377,13 @@ def normalize_name(name: str) -> str:
 _HEDGE_SUFFIX = re.compile(r"\(\s*(?:H|UH|합성|합성\s*H|환헤지|언헤지)\s*\)\s*$", re.I)
 
 
+def is_adjustment(name: str) -> bool:
+    """실현 섹션의 '점수 조정' 행 판별. 종목이 아니므로 시세 조회·추천 인정 대상이 아니다.
+    미추천 패널티(-10%)와 보너스(예: 결혼 보너스 +10%)가 여기 해당한다."""
+    t = str(name or "")
+    return ("미추천" in t) or ("패널티" in t) or ("보너스" in t)
+
+
 def parse_stock(name: str):
     name = str(name).strip()
     # 'KODEX WTI원유선물(H)'가 US 티커 'H'(하얏트)로 잡혀 178달러가 현재가로
@@ -931,6 +938,8 @@ def verify_realized_prices(ws: gspread.Worksheet, today: datetime.date):
 
             if not p_name or not p_sell_dt or not p_sell_pr:
                 continue
+            if is_adjustment(p_name):
+                continue   # 패널티·보너스 행은 종목이 아니다
 
             try:
                 sell_date = datetime.date.fromisoformat(str(p_sell_dt).strip()[:10])
@@ -1072,7 +1081,7 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
 
     월요일로 못박아뒀더니 2026-08-17(광복절 대체공휴일)처럼 월요일이 휴장이면
     라운드 자체가 인식되지 않아 8/18 화요일 라운드의 패널티가 통째로 누락됐다."""
-    def is_pen(p): return "미추천" in str(p) or "패널티" in str(p)
+    def is_pen(p): return is_adjustment(p)   # 패널티·보너스 모두 추천이 아니다
 
     vals = sheet_retry(ws.get_all_values, "시트 읽기")
     blocks = find_person_blocks(vals)

@@ -345,6 +345,61 @@ def refix_realized(ws, all_values, person_name, stock_name, dry_run=False):
     return True, "교정 완료 " + msg
 
 
+def add_adjustment(ws, all_values, person_name, date_str, label, pct, dry_run=False):
+    """실현 섹션에 점수 조정 행을 넣는다(보너스·감점). S=100 기준, T=100+pct.
+
+    미추천 패널티(-10%)와 같은 방식이며 라벨만 다르다. update_gsheets의
+    is_adjustment()가 '보너스'·'패널티'가 든 행을 종목이 아닌 조정으로 보므로
+    시세 조회나 추천 인정 대상에서 자동으로 빠진다."""
+    blocks = find_person_blocks(all_values)
+    block = next(
+        (b for b in blocks if b["person"] == person_name or person_name in b["person"]),
+        None,
+    )
+    if not block:
+        return False, f"'{person_name}' 블록을 찾을 수 없음"
+
+    if dry_run:
+        describe_block(all_values, block)
+
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        pv = (row[15] if len(row) > 15 else "").strip()
+        qv = (row[16] if len(row) > 16 else "").strip()[:10]
+        if pv == label and qv == date_str:
+            return False, f"'{person_name}'에 {date_str}자 '{label}'가 이미 있음(P{r}) — 중복 방지"
+
+    pr = None
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        pv = all_values[idx][15] if len(all_values[idx]) > 15 else ""
+        if not pv or not str(pv).strip():
+            pr = r
+            break
+    if pr is None:
+        return False, f"'{person_name}' 실현 섹션에 빈 행 없음"
+
+    t_val = round(100 + float(pct), 4)
+    desc = f"P{pr} '{label}' {date_str} {float(pct):+g}% (S=100, T={t_val:g})"
+    if dry_run:
+        return True, f"[드라이런] {desc} 기록 예정 (실제 쓰기 없음)"
+
+    ws.batch_update([
+        {"range": f"P{pr}", "values": [[label]]},
+        {"range": f"Q{pr}", "values": [[date_str]]},
+        {"range": f"R{pr}", "values": [[date_str]]},
+        {"range": f"S{pr}", "values": [[100]]},
+        {"range": f"T{pr}", "values": [[t_val]]},
+        {"range": f"U{pr}", "values": [[f"=(T{pr}-S{pr})/S{pr}"]]},
+    ], value_input_option="USER_ENTERED")
+    return True, "기록 완료 " + desc
+
+
 def _flag(name):
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "y")
 
@@ -355,12 +410,13 @@ def run():
     remove_raw = os.environ.get("REMOVE", "")
     penalty_raw = os.environ.get("RM_PENALTY", "")
     refix_raw = os.environ.get("REFIX", "")
+    bonus_raw = os.environ.get("BONUS", "")
     rec_date = get_rec_date(os.environ.get("REC_DATE") or None)
     dry_run = _flag("DRY_RUN")
     allow_dup = _flag("ALLOW_DUP")
 
-    if not (stocks_raw or rename_raw or remove_raw or penalty_raw or refix_raw):
-        print("[오류] STOCKS / RENAME / REMOVE / RM_PENALTY / REFIX 중 하나는 필요")
+    if not (stocks_raw or rename_raw or remove_raw or penalty_raw or refix_raw or bonus_raw):
+        print("[오류] STOCKS / RENAME / REMOVE / RM_PENALTY / REFIX / BONUS 중 하나는 필요")
         sys.exit(1)
 
     pairs = [s.strip().split(":", 1) for s in stocks_raw.split(",") if ":" in s]
@@ -385,6 +441,26 @@ def run():
     fails = 0
     for person, old, new in renames:
         ok, msg = rename_stock(ws, all_vals, person, old, new, dry_run=dry_run)
+        print(f"  {'✅' if ok else '❌'} {msg}\n")
+        if not ok:
+            fails += 1
+        if ok and not dry_run:
+            all_vals = ws.get_all_values()
+
+    for s4 in bonus_raw.split(","):
+        s4 = s4.strip()
+        parts = [x.strip() for x in s4.split(":")]
+        if len(parts) != 4:
+            if s4:
+                print(f"  ❌ BONUS 형식 오류: {s4!r} — '이름:YYYY-MM-DD:라벨:퍼센트' 이어야 함\n")
+                fails += 1
+            continue
+        person, d, label, pct = parts
+        try:
+            float(pct)
+        except ValueError:
+            print(f"  ❌ BONUS 퍼센트 파싱 실패: {pct!r}\n"); fails += 1; continue
+        ok, msg = add_adjustment(ws, all_vals, person, d, label, pct, dry_run=dry_run)
         print(f"  {'✅' if ok else '❌'} {msg}\n")
         if not ok:
             fails += 1

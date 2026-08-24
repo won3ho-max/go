@@ -23,6 +23,10 @@ on:
         description: '실현 기록 시세 재계산 — 이름:종목명 (추천일·매도일 종가로 S·T 재산정)'
         required: false
         type: string
+      bonus:
+        description: '실현 점수 조정 — 이름:YYYY-MM-DD:라벨:퍼센트 (예: 조형오:2026-08-24:결혼 보너스:10)'
+        required: false
+        type: string
       rec_date:
         description: '추천일 (YYYY-MM-DD, 비우면 이번주 월요일)'
         required: false
@@ -64,6 +68,7 @@ jobs:
           REMOVE:              ${{ inputs.remove }}
           RM_PENALTY:          ${{ inputs.rm_penalty }}
           REFIX:               ${{ inputs.refix }}
+          BONUS:               ${{ inputs.bonus }}
           REC_DATE:            ${{ inputs.rec_date }}
           DRY_RUN:             ${{ inputs.dry_run }}
           ALLOW_DUP:           ${{ inputs.allow_dup }}
