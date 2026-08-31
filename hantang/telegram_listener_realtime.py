@@ -447,18 +447,23 @@ def _pick(items, code: str = "", name: str = "", strict_foreign: bool = False):
                 if a != b:
                     if exact_only:
                         continue
+                    # 앞에서부터 이어지는 일치(접두)는 '이름을 줄여 쓴 것'으로 본다.
+                    #   '트럼프 미디어' → '트럼프 미디어 & 테크놀로지 그룹'(DJT)
+                    # 4글자 미만은 우연히 걸리기 쉬워 접두라도 인정하지 않는다.
+                    #   'SKT'·'SOL'이 여기서 걸러진다.
+                    prefix_ok = len(a) >= 4 and (b.startswith(a) or a.startswith(b))
                     if not is_kr and strict_foreign:
-                        # 해외는 완전일치만. 단 ADR은 국내 상장분으로 대체될 수 있어 통과
-                        # (대체 실패 시 호출부에서 채택하지 않음).
-                        if not _is_adr(nm):
+                        # 휴리스틱 경로의 해외 종목은 완전일치·접두·ADR만 인정한다.
+                        # (ADR은 뒤이어 국내 상장분 대체 검증을 통과해야 채택된다)
+                        if not (prefix_ok or _is_adr(nm)):
                             continue
                     elif not (a in b or b in a):
                         continue
                     # 후보가 종목명의 절반도 설명하지 못하면 우연한 부분일치로 본다.
                     #   'SOL' → 'SOL AI반도체TOP2플러스' 같은 오탐 차단.
-                    # ADR은 예외 — 뒤이어 국내 상장분 대체 검증을 통과해야만 채택되므로
-                    # 오탐 위험이 낮고, 이 가드가 'SKT'→SK텔레콤 경로를 막고 있었다.
-                    if len(a) * 2 < len(b) and not _is_adr(nm):
+                    # 접두 일치와 ADR은 예외 — 각각 축약 표기와 국내상장 대체 검증이
+                    # 뒷받침한다. 이 가드가 'SKT'→SK텔레콤 경로를 막고 있었다.
+                    if len(a) * 2 < len(b) and not prefix_ok and not _is_adr(nm):
                         continue
             if is_kr:
                 if kr is None or len(_norm(nm)) < len(_norm(kr[0])):
