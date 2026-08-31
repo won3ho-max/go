@@ -229,11 +229,12 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date):
     if not empty_row:
         return False, f"'{person_name}' 블록에 빈 행 없음"
 
-    cell_j = ws.cell(empty_row, 10)
-    cell_k = ws.cell(empty_row, 11)
-    cell_j.value = stock_name
-    cell_k.value = str(rec_date)
-    sheet_retry(lambda: ws.update_cells([cell_j, cell_k],
+    # ws.cell()은 값 하나를 읽으려고 매번 시트 API를 때린다. 그 호출은
+    # sheet_retry 밖에 있었던 탓에 2026-08-31 22:42 김태완/S-Oil 메시지가
+    # 503 한 번에 통째로 유실됐다. 셀 객체는 로컬에서 만들면 그만이다.
+    cells = [gspread.Cell(empty_row, 10, stock_name),
+             gspread.Cell(empty_row, 11, str(rec_date))]
+    sheet_retry(lambda: ws.update_cells(cells,
                                         value_input_option="USER_ENTERED"), "매수 기록")
     return True, f"{person_name} / {stock_name} 기록 완료 (기준가는 오늘 장 마감 후 자동입력)"
 
@@ -716,13 +717,13 @@ class SheetCache:
 
     def get_ss(self):
         if self.ss is None:
-            self.ss = open_spreadsheet()
+            self.ss = sheet_retry(open_spreadsheet, "스프레드시트 열기")
         return self.ss
 
     def ensure(self):
         if self.ss is None:
-            self.ss = open_spreadsheet()
-            self.ws = get_worksheet(self.ss)
+            self.ss = sheet_retry(open_spreadsheet, "스프레드시트 열기")
+            self.ws = sheet_retry(lambda: get_worksheet(self.ss), "워크시트 선택")
         if self.values is None or (time.time() - self.loaded_at) > SHEET_TTL:
             self.values = sheet_retry(self.ws.get_all_values, "시트 읽기")
             self.loaded_at = time.time()
@@ -886,6 +887,19 @@ def main():
                 try:
                     handle_message(msg, cache)
                 except Exception as e:
+                    # 마지막 안전망: 개별 시트 호출을 다 감싸도 새로 추가된 경로가
+                    # 빠질 수 있다. 일시 장애(5xx)면 캐시를 버리고 통째로 한 번 더.
+                    if any(c in str(e) for c in ("[500]", "[502]", "[503]", "[504]",
+                                                 "Timeout", "timed out",
+                                                 "Connection", "Unavailable")):
+                        log(f"[재시도] handle_message 통째 재실행: {e}")
+                        time.sleep(5)
+                        cache.ss = cache.ws = cache.values = None
+                        try:
+                            handle_message(msg, cache)
+                            continue
+                        except Exception as e2:
+                            e = e2
                     # 실패한 메시지의 내용을 반드시 남긴다. 예전엔 오류만 찍혀
                     # 무엇이 유실됐는지 알 수 없었다(2026-08-18 11:07 503 건).
                     frm = msg.get("from") or {}

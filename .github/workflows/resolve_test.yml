@@ -1,0 +1,68 @@
+name: 종목인식 테스트(읽기 전용)
+
+# 리스너의 resolve_stock을 실제 메시지 원문에 돌려본다. 시트에 쓰지 않는다.
+# 미인식 알림이 왔을 때 '왜 못 잡았나'를 시트 건드리지 않고 바로 확인하려는 용도.
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: '메시지 원문(줄바꿈은 \n 으로 적어도 된다)'
+        required: true
+        type: string
+      holdings:
+        description: '매도 테스트용 보유종목(쉼표 구분). 매수면 비움'
+        required: false
+        type: string
+
+defaults:
+  run:
+    working-directory: hantang
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 패키지 설치
+        run: pip install --quiet gspread google-auth requests
+      - name: 인식 시도
+        env:
+          TEXT:     ${{ inputs.text }}
+          HOLDINGS: ${{ inputs.holdings }}
+        run: |
+          python - <<'PY'
+          import os
+          import telegram_listener_realtime as L
+
+          text = os.environ["TEXT"].replace("\\n", "\n")
+          held = [h.strip() for h in (os.environ.get("HOLDINGS") or "").split(",") if h.strip()]
+
+          print("=" * 60)
+          print("원문:", text.replace("\n", " ")[:300])
+          print("보유:", ", ".join(held) or "(없음)")
+          print("=" * 60)
+
+          print("\n[휴리스틱 토큰 후보]")
+          for t in L._heuristic_names(text):
+              print("   ", repr(t))
+
+          print("\n[네이버 조회 결과]")
+          for t in dict.fromkeys(L._heuristic_names(text)):
+              items = L._naver_items(t)
+              if not items:
+                  print(f"    {t!r} → {'조회오류' if items is None else '결과없음'}")
+                  continue
+              for it in items[:4]:
+                  print(f"    {t!r} → {it.get('name')} | {it.get('code')} | "
+                        f"{it.get('nationCode')} | {it.get('typeCode')}")
+
+          stock, why = L.resolve_stock(text, holdings=held or None)
+          print("\n" + "=" * 60)
+          print("최종 판정 :", stock if stock else "❌ 인식 실패")
+          print("근거      :", why)
+          print("=" * 60)
+          PY
