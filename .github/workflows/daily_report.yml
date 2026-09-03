@@ -40,7 +40,23 @@ jobs:
           GSHEETS_ID:          ${{ secrets.GSHEETS_ID }}
           TELEGRAM_TOKEN:      ${{ secrets.HANTANG_TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ inputs.test_mode == true && '1633958343' || secrets.TELEGRAM_CHAT_ID }}
-        run: python update_gsheets.py
+        run: |
+          # 구글 시트가 5xx를 뿜는 날이 있다(2026-08-21·24, 09-04). 파이썬 안쪽
+          # 재시도로도 못 버티면 몇 분 뒤 통째로 다시 돌린다. 카드는 발송 표식
+          # (.card_sent_*)으로 중복 발송을 막으므로 재실행이 안전하다.
+          for attempt in 1 2 3; do
+            if python update_gsheets.py; then
+              echo "::notice::데일리 성공 (시도 $attempt회차)"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              WAIT=$((attempt * 180))
+              echo "::warning::데일리 실패 — ${WAIT}초 뒤 재시도 ($attempt/3)"
+              sleep "$WAIT"
+            fi
+          done
+          echo "::error::3회 모두 실패"
+          exit 1
 
       - name: 실패 알림
         if: failure()

@@ -85,7 +85,10 @@ def get_spreadsheet() -> gspread.Spreadsheet:
             sheet_id = id_file.read_text().strip()
     if not sheet_id:
         raise ValueError("GSHEETS_ID 환경변수 또는 gsheets_id.txt 필요")
-    return get_client().open_by_key(sheet_id)
+    # open_by_key는 곧바로 시트 메타데이터를 받아오는 원격 호출이다. 이 한 줄이
+    # 재시도 밖에 있던 탓에 2026-09-04 데일리가 503 한 번에 통째로 죽어 카드가
+    # 안 나갔다. 뒤의 모든 작업이 여기에 매달려 있으므로 여기부터 감싼다.
+    return sheet_retry(lambda: get_client().open_by_key(sheet_id), "스프레드시트 열기")
 
 # ── 구글시트 호출 재시도 ─────────────────────────────────────────────────
 def sheet_retry(fn, what="시트 작업", tries=5):
@@ -816,6 +819,13 @@ def export_portfolio_json(all_values: list, sheet_name: str, today: datetime.dat
 
 # ── 카드뉴스 생성 + 텔레그램 전송 ────────────────────────────────────────
 def run_card_and_telegram(today: datetime.date):
+    # 재실행 안전장치: 데일리는 카드를 보낸 뒤에도 패널티·직전분기 처리를 이어간다.
+    # 그 뒤에서 죽어 워크플로가 재시도하면 카드가 두 번 나갈 수 있으므로,
+    # 발송에 성공하면 표식을 남기고 같은 날 재실행에서는 건너뛴다.
+    sent_flag = BASE_DIR / f".card_sent_{today}"
+    if sent_flag.exists():
+        print("  · 카드 이미 발송됨 — 재발송 건너뜀")
+        return
     try:
         import importlib.util
         mod_path = BASE_DIR / "generate_card_github.py"
@@ -826,6 +836,7 @@ def run_card_and_telegram(today: datetime.date):
         persons = mod.load_portfolio(skip_price_refresh=True)[1]  # 이미 갱신된 가격 사용
         card_path = mod.generate_image(sheet_name, persons, today)
         mod.send_telegram(card_path, today)
+        sent_flag.write_text("sent")
     except Exception as e:
         print(f"[경고] 카드뉴스/텔레그램 실패: {e}")
 
@@ -1031,7 +1042,8 @@ def fix_pending_sells(ss, today: datetime.date):
     """리스너가 자동매도한 행(_pending_sell)의 매도가(T)를 매도일 종가로 확정한다.
     과거 데이터는 건드리지 않고, 목록에 있는 행만 정정 후 목록에서 제거."""
     try:
-        wp = ss.worksheet("_pending_sell")
+        # sheet_retry는 5xx만 재시도한다. 시트가 없으면 그대로 올라와 아래에서 잡힌다.
+        wp = sheet_retry(lambda: ss.worksheet("_pending_sell"), "_pending_sell 열기")
     except gspread.WorksheetNotFound:
         return []
     rows = sheet_retry(wp.get_all_values, "시트 읽기")
@@ -1052,7 +1064,7 @@ def fix_pending_sells(ss, today: datetime.date):
             keep.append(r)          # 아직 종가 미확정 → 다음 실행에 처리
             continue
         try:
-            ws2 = ss.worksheet(title)
+            ws2 = sheet_retry(lambda: ss.worksheet(title), f"'{title}' 열기")
         except Exception:
             continue
         market, code = parse_stock(str(name).strip())
@@ -1202,7 +1214,8 @@ def main():
     print(f"=== 한탕 스터디 Google Sheets 업데이트 ({today}) ===")
 
     ss = get_spreadsheet()
-    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
+              if not s.title.startswith("_")]
     current = sheets[-1]
 
     # 리스너 자동매도분 매도가를 종가로 확정

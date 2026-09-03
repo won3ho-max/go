@@ -16,7 +16,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # 시세 로직은 update_gsheets 것을 그대로 쓴다(규칙을 두 벌 두지 않기 위해).
-from update_gsheets import parse_stock, close_at
+from update_gsheets import parse_stock, close_at, sheet_retry
 
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
@@ -28,8 +28,10 @@ def get_worksheet():
     info = json.loads(os.environ["GSHEETS_CREDENTIALS"])
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     gc = gspread.authorize(creds)
-    ss = gc.open_by_key(os.environ["GSHEETS_ID"])
-    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    ss = sheet_retry(lambda: gc.open_by_key(os.environ["GSHEETS_ID"]),
+                     "스프레드시트 열기")
+    sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
+              if not s.title.startswith("_")]
     return sheets[-1]
 
 

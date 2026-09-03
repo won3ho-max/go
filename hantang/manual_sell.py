@@ -29,7 +29,8 @@ from google.oauth2.service_account import Credentials
 from pathlib import Path
 
 # 시세 로직은 update_gsheets 것을 그대로 쓴다(같은 규칙을 두 벌 두지 않기 위해).
-from update_gsheets import parse_stock, close_at, latest_close, last_completed_session
+from update_gsheets import (parse_stock, close_at, latest_close,
+                            last_completed_session, sheet_retry)
 
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 SCOPES = [
@@ -59,7 +60,7 @@ def get_spreadsheet() -> gspread.Spreadsheet:
             sheet_id = id_file.read_text().strip()
     if not sheet_id:
         raise ValueError("GSHEETS_ID 환경변수 또는 gsheets_id.txt 필요")
-    return get_client().open_by_key(sheet_id)
+    return sheet_retry(lambda: get_client().open_by_key(sheet_id), "스프레드시트 열기")
 
 
 def find_person_blocks(all_values):
@@ -123,7 +124,8 @@ def resolve_sell_price(stock_label: str, sell_date_s: str):
 def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: float,
                 dry_run: bool = False, pending: bool = False):
     ss = get_spreadsheet()
-    sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
+    sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
+              if not s.title.startswith("_")]
     ws = sheets[-1]
     print(f"[시트] {ws.title}")
 
