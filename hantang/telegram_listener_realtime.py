@@ -373,6 +373,65 @@ _LEAD_NOISE = {"매수", "매도", "추천", "재추천", "종목추천", "종�
 _stock_cache = {}
 
 
+_ADJUST_WORDS = ("미추천", "패널티", "보너스")
+
+
+def past_labels(all_values, person_name):
+    """해당 멤버가 이 분기에 쓴 종목 라벨 전부(활성 J + 실현 P, 중복 제거).
+    패널티·보너스 같은 조정 행은 종목이 아니므로 뺀다."""
+    blocks = find_person_blocks(all_values)
+    block = next((b for b in blocks
+                  if b["person"] == person_name or person_name in b["person"]), None)
+    if not block:
+        return []
+    out = []
+    for r in range(block["row_start"], block["row_end"] + 1):
+        idx = r - 1
+        if idx >= len(all_values):
+            break
+        row = all_values[idx]
+        for ci in (9, 15):
+            v = (row[ci] if len(row) > ci else "") or ""
+            v = v.strip()
+            if not v or any(w in v for w in _ADJUST_WORDS):
+                continue
+            if v not in out:
+                out.append(v)
+    return out
+
+
+def _lcp(a: str, b: str) -> int:
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def _from_history(text: str, history):
+    """본인이 전에 쓴 라벨과 대조해 '재추천'을 건져낸다.
+
+    네이버는 사람이 줄여 쓴 ETF 이름을 못 찾는다. 2026-09-08 조형오의
+    'SOL 조선TOP3레버리지'는 정식명이 'SOL 조선TOP3플러스레버리지'라
+    완전일치·접두 어느 쪽에도 안 걸렸고, 남은 토큰 'SOL'이 해외 ADR로
+    잘못 걸리면서 인식이 통째로 실패했다.
+
+    시트에 이미 있는 라벨은 그 자체가 정답 표기이므로 네이버 재검증이
+    필요 없다. 다만 오인식을 막기 위해 앞에서부터 6글자 이상 일치하고,
+    그 조건을 만족하는 과거 라벨이 하나뿐일 때만 채택한다."""
+    if not history:
+        return None
+    for tok in _heuristic_names(text):
+        nt = _norm(tok)
+        if len(nt) < 6:
+            continue
+        hits = [h for h in history if _lcp(nt, _norm(h)) >= 6]
+        if len(hits) == 1:
+            return hits[0], tok
+    return None
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[\s\(\)\[\]{}·\-_/\.]", "", s or "").upper()
 
@@ -590,7 +649,7 @@ def resolve_stock_llm(text: str, holdings=None):
         return None
 
 
-def resolve_stock(text: str, holdings=None):
+def resolve_stock(text: str, holdings=None, history=None):
     """종목 확정. 반환: (시트표기 문자열 or None, 판정근거 문자열)
 
     후보 우선순위 — ① 보유 종목 직접 대조(매도 시) ② 원문 거래소표기 티커
@@ -636,6 +695,11 @@ def resolve_stock(text: str, holdings=None):
     for nm in _heuristic_names(text):
         cands.append(("name", nm, "원문 토큰"))
 
+    # 원문 토큰이 네이버에서 안 잡히는 경우를 대비한 마지막 보루.
+    # 후보 목록 맨 뒤에 두지 않고 여기서 바로 확정하는 이유는, 시트에 이미
+    # 있는 라벨이 네이버 검색결과보다 확실한 정답이기 때문이다.
+    hist_hit = _from_history(text, history)
+
     prefer_kr = bool(info) and (info.get("market", "").upper() == "KR")
     deferred = None      # 국내 후보를 더 찾아본 뒤에야 채택할 해외 결과
     seen = set()
@@ -680,6 +744,9 @@ def resolve_stock(text: str, holdings=None):
     if deferred:
         res, why, val = deferred
         return _fmt_stock(res), f"{why} '{val}' → 네이버 {res[0]}({res[1]}) (국내 상장 없음)"
+    if hist_hit:
+        label, tok = hist_hit
+        return label, f"본인 과거 추천 대조 '{tok}' → 시트 기존 표기 '{label}'"
     return None, "; ".join(notes[:4]) or "후보 없음"
 
 
@@ -765,14 +832,14 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"※ 멤버 매핑 안 됨 → 자동기록 안 함")
             log(f"[매수-미매핑] id={sid}")
             return
-        stock, why = resolve_stock(text)
+        ws, values = cache.ensure()
+        stock, why = resolve_stock(text, history=past_labels(values, member))
         if not stock:
             notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
                          f"※ 종목명 자동인식 실패 → 자동기록 안 함(수동 확정 필요)\n"
                          f"사유: {why}")
             log(f"[매수-미인식] {member}: {why}")
             return
-        ws, values = cache.ensure()
         dup = find_active_dup(values, member, stock)
         if dup:
             notify_admin(f"⚠️ 매수 감지 — {member} / {stock}\n원문: {body}\n"

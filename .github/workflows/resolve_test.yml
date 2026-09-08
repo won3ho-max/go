@@ -14,6 +14,10 @@ on:
         description: '매도 테스트용 보유종목(쉼표 구분). 매수면 비움'
         required: false
         type: string
+      history:
+        description: '본인 과거 추천 라벨(쉼표 구분). 재추천 인식 테스트용'
+        required: false
+        type: string
 
 defaults:
   run:
@@ -33,6 +37,7 @@ jobs:
         env:
           TEXT:     ${{ inputs.text }}
           HOLDINGS: ${{ inputs.holdings }}
+          HISTORY:  ${{ inputs.history }}
         run: |
           python - <<'PY'
           import os
@@ -40,10 +45,12 @@ jobs:
 
           text = os.environ["TEXT"].replace("\\n", "\n")
           held = [h.strip() for h in (os.environ.get("HOLDINGS") or "").split(",") if h.strip()]
+          hist = [h.strip() for h in (os.environ.get("HISTORY") or "").split(",") if h.strip()]
 
           print("=" * 60)
           print("원문:", text.replace("\n", " ")[:300])
           print("보유:", ", ".join(held) or "(없음)")
+          print("과거:", ", ".join(hist) or "(없음)")
           print("=" * 60)
 
           print("\n[휴리스틱 토큰 후보]")
@@ -60,7 +67,7 @@ jobs:
                   print(f"    {t!r} → {it.get('name')} | {it.get('code')} | "
                         f"{it.get('nationCode')} | {it.get('typeCode')}")
 
-          stock, why = L.resolve_stock(text, holdings=held or None)
+          stock, why = L.resolve_stock(text, holdings=held or None, history=hist or None)
           print("\n" + "=" * 60)
           print("최종 판정 :", stock if stock else "❌ 인식 실패")
           print("근거      :", why)
