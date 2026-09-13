@@ -282,6 +282,8 @@ def load_portfolio(skip_price_refresh=False):
 
         realized = []
         for r in p.get("realized", []):
+            # 미추천 패널티·보너스는 '판 것'이 아니라 점수 조정이다.
+            # 매도 건수에 섞여 들어가면 몇 종목을 팔았는지가 부정확해진다.
             ret_pct = r.get("return_pct")
             ret = ret_pct / 100 if ret_pct is not None else None
             realized.append({
@@ -291,7 +293,11 @@ def load_portfolio(skip_price_refresh=False):
                 "sell_date": r.get("sell_date", ""),
                 "base": r.get("base_price") or 0, "sell_price": r.get("sell_price") or 0,
                 "ret": ret,
+                "kind": "etc" if is_adjustment(r.get("name", "")) else "sold",
             })
+
+        # 매도를 먼저, 조정(기타)을 뒤에 — 카드에서 같은 성격끼리 묶여 읽힌다.
+        realized.sort(key=lambda x: x["kind"] == "etc")
 
         active_rets = [s["ret"] for s in stocks if s["ret"] is not None]
         realized_rets = [r["ret"] for r in realized if r["ret"] is not None]
@@ -309,6 +315,14 @@ def load_portfolio(skip_price_refresh=False):
 
     persons.sort(key=lambda x: x["total_ret"], reverse=True)
     return sheet_name, persons
+
+
+_ADJUST_WORDS = ("미추천", "패널티", "보너스")
+
+
+def is_adjustment(name: str) -> bool:
+    """종목이 아니라 점수 조정 행인지. update_gsheets.is_adjustment와 같은 기준."""
+    return any(w in str(name or "") for w in _ADJUST_WORDS)
 
 
 def shorten_name(name: str) -> str:
@@ -404,10 +418,14 @@ def render_ranking_panel(d, persons, x0, y0, w, h):
         d.text((cx - (rb[2]-rb[0])//2, cy - (rb[3]-rb[1])//2 - 1), rn, font=rn_font, fill=fc)
         d.text((x0+60, ry+8), p["person"], font=_font(bold=True, size=17), fill=DARK)
         n_stocks = len(p["stocks"])
-        n_realized = len(p.get("realized", []))
+        rl = p.get("realized", [])
+        n_sold = sum(1 for r in rl if r.get("kind") != "etc")
+        n_etc  = sum(1 for r in rl if r.get("kind") == "etc")
         count_str = f"{n_stocks}종목"
-        if n_realized:
-            count_str += f" +{n_realized}매도"
+        if n_sold:
+            count_str += f" +{n_sold}매도"
+        if n_etc:
+            count_str += f" +{n_etc}기타"
         d.text((x0+60, ry+30), count_str, font=_font(size=11), fill=GREY_TEXT)
         ret = p["total_ret"]
         text_right(d, x0+w-20, ry+12, pct_str(ret), _font(bold=True, size=20), pct_color(ret))
@@ -512,7 +530,7 @@ def render_person_card(d, person, rank, x, y, w, h):
         mkt = item.get("market", "KR")
         # 매도/기타 뱃지 (작게)
         stock_name_raw = item.get("name", "")
-        if "미추천" in stock_name_raw or "패널티" in stock_name_raw:
+        if item.get("kind") == "etc" or is_adjustment(stock_name_raw):
             badge_label = "기타"
             badge_bg = (219, 229, 255)       # 연한 파랑
             badge_fg = (70, 100, 180)        # 진한 파랑
