@@ -456,7 +456,9 @@ _EXCH_TICKER_RE = re.compile(
     r"(?:NYSE\s*American|NYSE|NASDAQ|AMEX|ARCA|CBOE|나스닥|뉴욕증권거래소|뉴욕거래소)"
     r"\s*[:：]?\s*([A-Z]{1,5})\b")
 # 괄호 안 단독 티커 (예: (COHR))
-_PAREN_TICKER_RE = re.compile(r"\(\s*([A-Z]{2,5})\s*\)")
+# 괄호 티커: (BITX)뿐 아니라 [BITX]도 받는다. 2026-09-21 이원호 원문이
+# '[BITX]'였는데 대괄호를 못 읽어 뒤따르는 '비트코인'이 엉뚱한 종목에 걸렸다.
+_PAREN_TICKER_RE = re.compile(r"[\(\[]\s*([A-Z]{2,5})\s*[\)\]]")
 
 
 def _naver_items(query: str):
@@ -511,7 +513,11 @@ def _pick(items, code: str = "", name: str = "", strict_foreign: bool = False):
                     #   '트럼프 미디어' → '트럼프 미디어 & 테크놀로지 그룹'(DJT)
                     # 4글자 미만은 우연히 걸리기 쉬워 접두라도 인정하지 않는다.
                     #   'SKT'·'SOL'이 여기서 걸러진다.
-                    prefix_ok = len(a) >= 4 and (b.startswith(a) or a.startswith(b))
+                    # 단, 접두가 정식명의 1/3도 못 되면 우연으로 본다.
+                    #   '비트코인'(4) → '비트코인 인프라스트럭처 애퀴지션'(15) 오탐
+                    #   (2026-09-21 이원호 BITX 건). '트럼프미디어'(6/15)는 통과.
+                    prefix_ok = (len(a) >= 4 and len(a) * 3 >= len(b)
+                                 and (b.startswith(a) or a.startswith(b)))
                     if not is_kr and strict_foreign:
                         # 휴리스틱 경로의 해외 종목은 완전일치·접두·ADR만 인정한다.
                         # (ADR은 뒤이어 국내 상장분 대체 검증을 통과해야 채택된다)
