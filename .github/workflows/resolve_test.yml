@@ -43,7 +43,16 @@ jobs:
           import os
           import telegram_listener_realtime as L
 
-          text = os.environ["TEXT"].replace("\\n", "\n")
+          raw = os.environ["TEXT"]
+          if "||" in raw:
+              print("[회귀 모드] '||' 구분 다건")
+              for i, t in enumerate(raw.split("||"), 1):
+                  t = t.strip().replace("\\n", "\n")
+                  st, wy = L.resolve_stock(t)
+                  print(f"{i:>2}. {t[:40]!r}")
+                  print(f"    → {st or '❌ 인식 실패'}  | {wy[:110]}")
+              raise SystemExit(0)
+          text = raw.replace("\\n", "\n")
           held = [h.strip() for h in (os.environ.get("HOLDINGS") or "").split(",") if h.strip()]
           hist = [h.strip() for h in (os.environ.get("HISTORY") or "").split(",") if h.strip()]
 
