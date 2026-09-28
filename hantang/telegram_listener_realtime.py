@@ -433,7 +433,7 @@ def _from_history(text: str, history):
 
 
 def _norm(s: str) -> str:
-    return re.sub(r"[\s\(\)\[\]{}·\-_/\.]", "", s or "").upper()
+    return re.sub(r"[\s\(\)\[\]{}·\-_/\.“”‘’\"']", "", s or "").upper()
 
 
 # 국내 ETF 환헤지 표기. 티커가 아니다.
@@ -587,7 +587,10 @@ def _heuristic_names(text: str):
     out = []
     t = (text or "").replace("#", " ")
     for line in t.split("\n")[:5]:
-        line = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]]", " ", line)
+        # 스마트 따옴표(“ ” ‘ ’ 「 」 『 』 <> 등)도 털어낸다. 카카오·텔레그램
+        # 모바일 입력기가 곧은 따옴표를 자동으로 바꿔 넣는다. 2026-09-28
+        # 김동환의 '“제이에스링크”'가 이것 때문에 통째로 인식에 실패했다.
+        line = re.sub(r"[·:;,/|_\-\*\"\'`!?()\[\]“”‘’「」『』〈〉《》<>]", " ", line)
         toks = [w for w in line.split() if w]
         while toks and (toks[0] in _LEAD_NOISE or re.fullmatch(r"\d+[.)]?", toks[0])):
             toks.pop(0)
