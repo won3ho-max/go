@@ -697,9 +697,16 @@ def resolve_stock(text: str, holdings=None, history=None):
             if info.get(k):
                 cands.append(("name", info[k], f"LLM {k}"))
 
-    paren = sorted({m.group(1).upper() for m in _PAREN_TICKER_RE.finditer(text)})
+    # 괄호 티커는 '종목명(TICKER)' 관례가 쓰이는 앞부분에서만 읽는다.
+    # 사유 본문에서는 괄호가 한글 용어의 영문 약어 자리로 쓰인다.
+    #   '인쇄회로기판(PCB)' → 티커 PCB → 'PCB 뱅코프' 오기록
+    #   (2026-09-28 송지호 건). 앞 2줄로 좁혀 이 충돌을 끊는다.
+    head = "\n".join((text or "").split("\n")[:2])
+    paren = sorted({m.group(1).upper() for m in _PAREN_TICKER_RE.finditer(head)})
     if len(paren) == 1 and not exch:
         cands.append(("code", paren[0], "원문 괄호 티커"))
+    elif len(paren) > 1:
+        notes.append(f"앞 2줄 괄호 티커 다수({','.join(paren)}) → 미사용")
 
     for nm in _heuristic_names(text):
         cands.append(("name", nm, "원문 토큰"))
