@@ -582,6 +582,19 @@ def _fmt_stock(res) -> str:
     return nm if is_kr else f"{nm}({cd})"
 
 
+_REASON_CUT = re.compile(
+    r"(?m)^\s*(?:\d+[.)]|[-*>•]|ㅇ)\s*\S"   # 줄머리 사유 표식
+    r"|\s[-*>•]\s*\S"                        # 줄 가운데 '- ', '> '
+    r"|사유")
+
+
+def _name_region(text: str) -> str:
+    """종목명이 적히는 구간만 잘라낸다(앞 3줄 + 사유 시작 이전)."""
+    head = "\n".join((text or "").split("\n")[:3])
+    m = _REASON_CUT.search(head)
+    return head[:m.start()] if m else head
+
+
 def _heuristic_names(text: str):
     """앞 5줄에서 종목명 후보 토큰열 생성(기존 폴백 로직)."""
     out = []
@@ -697,12 +710,13 @@ def resolve_stock(text: str, holdings=None, history=None):
             if info.get(k):
                 cands.append(("name", info[k], f"LLM {k}"))
 
-    # 괄호 티커는 '종목명(TICKER)' 관례가 쓰이는 앞부분에서만 읽는다.
-    # 사유 본문에서는 괄호가 한글 용어의 영문 약어 자리로 쓰인다.
-    #   '인쇄회로기판(PCB)' → 티커 PCB → 'PCB 뱅코프' 오기록
-    #   (2026-09-28 송지호 건). 앞 2줄로 좁혀 이 충돌을 끊는다.
-    head = "\n".join((text or "").split("\n")[:2])
-    paren = sorted({m.group(1).upper() for m in _PAREN_TICKER_RE.finditer(head)})
+    # 괄호 티커는 '종목명(TICKER)' 관례가 통하는 '이름 구간'에서만 읽는다.
+    # 사유 본문에서 괄호는 한글 용어의 영문 약어 자리로 훨씬 자주 쓰인다.
+    #   '인쇄회로기판(PCB)' → 티커 PCB → 'PCB 뱅코프' 오기록 (2026-09-28 송지호)
+    #   '비상발전기(UPS)'   → 티커 UPS → 택배회사 UPS
+    # 사유가 시작되는 지점('1.', '-', '>', 'ㅇ', '사유')에서 잘라낸다.
+    paren = sorted({m.group(1).upper()
+                    for m in _PAREN_TICKER_RE.finditer(_name_region(text))})
     if len(paren) == 1 and not exch:
         cands.append(("code", paren[0], "원문 괄호 티커"))
     elif len(paren) > 1:
