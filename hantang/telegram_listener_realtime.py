@@ -855,14 +855,17 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"※ 이미 활성 보유 중: {dup}\n"
                          f"→ 중복 의심으로 자동기록 보류(정당한 재추천이면 "
                          f"batch_add allow_dup=true로 수동 추가)\n근거: {why}")
-            log(f"[매수-중복보류] {member}/{stock}: {dup}")
+            log(f"[매수-중복보류] {member}/{stock}: {dup} | 근거: {why} | 원문: {body}")
             return
         ok, result = add_stock(ws, values, member, stock, today_kst())
         if ok:
             cache.refresh()
         icon = "✅" if ok else "❌"
         notify_admin(f"{icon} 매수 자동기록 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
-        log(f"[매수-{'기록' if ok else '실패'}] {member}/{stock}: {result}")
+        # 원문을 함께 남긴다. 예전엔 미인식 건만 원문을 찍어서, 엉뚱한 종목이
+        # '정상 기록'되면 무엇을 보고 그렇게 판정했는지 되짚을 수가 없었다.
+        # (2026-09-28 송지호 → 'PCB 뱅코프(PCB)' 오기록)
+        log(f"[매수-{'기록' if ok else '실패'}] {member}/{stock}: {result} | 근거: {why} | 원문: {body}")
     else:  # sell
         if not member:
             notify_admin(f"🔴 매도 감지(미매핑) — id={sid} {sender}\n원문: {body}\n"
@@ -885,7 +888,7 @@ def handle_message(msg: dict, cache: SheetCache):
             cache.refresh()
         icon = "✅" if ok else "❌"
         notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
-        log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result}")
+        log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result} | 근거: {why} | 원문: {body}")
 
 
 # ── offset 영속화 (로컬 파일) ─────────────────────────────────────────────
