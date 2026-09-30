@@ -1,0 +1,52 @@
+{
+  "_설명": "config.json으로 복사해서 쓰세요. 버튼 이름은 추정치입니다. 반드시 /dump로 실제 화면 글자를 확인해 고치세요.",
+
+  "package": "com.starbucks.co",
+  "return_package": "org.telegram.messenger",
+  "confirm_before_pay": true,
+
+  "default_menu": "아아",
+  "default_store": "",
+
+  "menus": {
+    "아아": "아이스 카페 아메리카노",
+    "라떼": "카페 라떼",
+    "콜브": "콜드 브루"
+  },
+
+  "steps": [
+    {"action": "launch", "restart": true, "after": 4},
+
+    {"_주석": "앱 실행 직후 이벤트 팝업 닫기 (없으면 건너뜀)",
+     "action": "tap", "text": "닫기", "contains": true, "optional": true, "timeout": 3},
+
+    {"action": "tap", "text": "Order", "timeout": 15},
+    {"action": "tap", "text": "나만의 메뉴", "contains": true},
+
+    {"_주석": "나만의 메뉴 목록에서 메뉴 이름 찾기 (아래로 스크롤하며 탐색)",
+     "action": "tap", "text": "{menu}", "contains": true, "scroll": true},
+    {"action": "tap", "text": "주문하기", "contains": true},
+
+    {"_주석": "매장 선택 화면이 뜰 때만 동작",
+     "action": "wait", "text": "가까운 매장", "contains": true, "optional": true, "timeout": 5},
+
+    {"_주석": "지점명을 지정했으면 검색",
+     "if": "store", "action": "tap", "desc": "검색", "contains": true},
+    {"if": "store", "action": "type", "text": "{store}"},
+    {"if": "store", "action": "tap", "text": "{store}", "contains": true, "index": 1, "timeout": 8},
+
+    {"_주석": "지점명이 없으면 '가까운 매장' 첫 번째 (거리 표시 '0.3km'·'250m'를 기준으로 탭)",
+     "unless": "store", "action": "tap", "text": "가까운 매장", "contains": true, "optional": true, "timeout": 3},
+    {"unless": "store", "action": "tap", "text": "^\\d+(\\.\\d+)?\\s?k?m$", "regex": true, "timeout": 8},
+
+    {"action": "tap", "text": "매장에서 주문", "contains": true, "optional": true, "timeout": 4},
+    {"action": "tap", "text": "주문하기", "contains": true, "optional": true, "timeout": 4},
+
+    {"_주석": "결제 화면 도착 확인",
+     "action": "wait", "text": "결제하기", "contains": true, "timeout": 12},
+    {"action": "checkpoint"},
+    {"action": "tap", "text": "결제하기", "contains": true, "after": 3},
+
+    {"action": "wait", "text": "주문", "contains": true, "optional": true, "timeout": 10}
+  ]
+}
