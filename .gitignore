@@ -15,3 +15,8 @@ __pycache__/
 *.pyc
 .DS_Store
 gsheets_service_account.txt
+
+# 커피 봇 (config.json은 개인 설정이라 제외, 예시만 커밋)
+!coffee_bot/config.example.json
+coffee_bot/.env
+coffee_bot/bot.log
