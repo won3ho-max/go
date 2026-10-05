@@ -822,7 +822,14 @@ def run_card_and_telegram(today: datetime.date):
     # 재실행 안전장치: 데일리는 카드를 보낸 뒤에도 패널티·직전분기 처리를 이어간다.
     # 그 뒤에서 죽어 워크플로가 재시도하면 카드가 두 번 나갈 수 있으므로,
     # 발송에 성공하면 표식을 남기고 같은 날 재실행에서는 건너뛴다.
-    sent_flag = BASE_DIR / f".card_sent_{today}"
+    # 표식은 분기 탭별로 둔다. 날짜 하나로만 두면 분기 전환기(현재+직전 분기 카드
+    # 2장)에 첫 카드가 표식을 남겨 두 번째(직전 분기) 카드가 조용히 빠진다.
+    try:
+        _sheet = json.loads((BASE_DIR / "portfolio.json").read_text())["sheet"]
+    except Exception:
+        _sheet = "unknown"
+    _tag = re.sub(r"[^0-9A-Za-z가-힣]+", "_", _sheet)
+    sent_flag = BASE_DIR / f".card_sent_{today}_{_tag}"
     if sent_flag.exists():
         print("  · 카드 이미 발송됨 — 재발송 건너뜀")
         return
@@ -1209,32 +1216,72 @@ def process_quarter(ws: gspread.Worksheet, today: datetime.date, is_current: boo
     run_card_and_telegram(today)
 
 
+def _send_admin(text: str):
+    tok = os.environ.get("TELEGRAM_TOKEN", "")
+    if not tok:
+        return
+    try:
+        requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                      data={"chat_id": "1633958343", "text": text}, timeout=10)
+    except Exception:
+        pass
+
+
+def has_unconfirmed_sells(ss, title: str) -> bool:
+    """_pending_sell에 이 탭의 매도가 미확정 건이 남아 있으면 True.
+    직전 분기 마지막 종목을 리스너로 팔면 활성은 0이 되지만 매도가는 다음 날
+    확정된다. 활성만 보고 끊으면 확정된 최종 점수가 실린 카드가 안 나간다."""
+    try:
+        wp = sheet_retry(lambda: ss.worksheet("_pending_sell"), "_pending_sell 열기")
+        rows = sheet_retry(wp.get_all_values, "시트 읽기")
+        return any(r and r[0] == title for r in rows[1:])
+    except Exception:
+        return False
+
+
 def main():
+    from telegram_listener_realtime import (ensure_quarter_tab, quarter_tabs,
+                                            quarter_key, prev_quarter_key)
     today = today_kst()
     print(f"=== 한탕 스터디 Google Sheets 업데이트 ({today}) ===")
 
     ss = get_spreadsheet()
-    sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
-              if not s.title.startswith("_")]
-    current = sheets[-1]
 
-    # 리스너 자동매도분 매도가를 종가로 확정
+    # 현재 분기 탭을 '맨 뒤 탭'이 아니라 날짜로 고른다. 없으면 직전 분기를 복제해
+    # 만든다(리스너가 먼저 만들었으면 그대로 쓴다).
+    cur_key = quarter_key(today)
+    current, made = sheet_retry(lambda: ensure_quarter_tab(ss, cur_key), "분기 탭 준비")
+    if made:
+        print(f"  [분기탭 생성] {current.title}")
+        _send_admin(f"🆕 데일리가 {current.title} 탭을 만들었습니다 (직전 분기 복제, 종목·실현 칸 비움)")
+    if current is None:
+        sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
+                  if not s.title.startswith("_")]
+        current = sheets[-1]
+        print(f"  [주의] 분기 탭 판별 실패 → 맨 뒤 탭 {current.title} 사용")
+    prev = quarter_tabs(ss).get(prev_quarter_key(cur_key))
+    # 확정 처리(fix_pending_sells) 전에 본다 — 오늘 확정되는 건도 카드에 실려야 한다
+    prev_pending = (prev is not None) and has_unconfirmed_sells(ss, prev.title)
+
+    # 리스너 자동매도분 매도가를 종가로 확정 (모든 탭)
     for f in (fix_pending_sells(ss, today) or []):
         print(f"  · {f}")
 
     # 현재 분기 처리
     process_quarter(current, today, is_current=True)
 
-    # 당일 미추천자 -10% 패널티 자동 부여 (월요일 라운드)
+    # 미추천자 -10% 패널티 자동 부여 (주간 라운드) — 현재 분기만
     for f in (apply_missed_recommendation_penalties(current, today) or []):
         print(f"  · [미추천패널티] {f}")
 
-    # 직전 분기(예: 2분기)만, 활성 종목이 남아있는 동안 갱신 (모두 매도되면 자동 제외)
-    if len(sheets) >= 2:
-        prev = sheets[-2]
-        if "분기" in prev.title and "테스트" not in prev.title and has_active_positions(prev):
-            print(f"\n=== 직전 분기 갱신: {prev.title} (활성 종목 잔존) ===")
+    # 직전 분기: 활성 종목 또는 매도가 미확정 건이 남아 있는 동안 갱신·카드 발송.
+    # 모두 정산되면 자동으로 빠진다.
+    if prev is not None and prev.title != current.title:
+        if prev_pending or has_active_positions(prev):
+            print(f"\n=== 직전 분기 갱신: {prev.title} (미정산 잔존) ===")
             process_quarter(prev, today, is_current=False)
+        else:
+            print(f"  직전 분기 {prev.title}: 전부 정산됨 — 카드 생략")
 
 
 if __name__ == "__main__":

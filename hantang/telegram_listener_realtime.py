@@ -145,7 +145,117 @@ def open_spreadsheet() -> gspread.Spreadsheet:
 
 def get_worksheet(ss: gspread.Spreadsheet) -> gspread.Worksheet:
     sheets = [s for s in ss.worksheets() if not s.title.startswith("_")]
-    return sheets[-1]   # 최신 분기 시트
+    return sheets[-1]   # 최신 분기 시트 (분기 탭을 못 찾을 때의 폴백)
+
+
+# ── 거래일·분기 ───────────────────────────────────────────────────────────
+# VM에는 exchange_calendars가 없다(배포 pip 목록 밖). 있으면 쓰고, 없으면 아래 표.
+# 표는 exchange_calendars 4.13 XKRX에서 뽑은 평일 휴장일. 매년 갱신 필요.
+KRX_HOLIDAYS = {
+    "2026-09-24", "2026-09-25", "2026-10-05", "2026-10-09", "2026-12-25", "2026-12-31",
+    "2027-01-01", "2027-02-08", "2027-02-09", "2027-03-01", "2027-05-05", "2027-05-13",
+    "2027-08-16", "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-04",
+}
+try:
+    import exchange_calendars as _xcals
+    _XKRX = _xcals.get_calendar("XKRX")
+except Exception:
+    _XKRX = None
+
+
+def is_krx_session(d: datetime.date) -> bool:
+    if _XKRX is not None:
+        try:
+            return bool(_XKRX.is_session(d.isoformat()))
+        except Exception:
+            pass
+    return d.weekday() < 5 and d.isoformat() not in KRX_HOLIDAYS
+
+
+def next_krx_session(d: datetime.date) -> datetime.date:
+    """d가 거래일이면 d, 아니면 다음 거래일.
+    휴장일(주말·공휴일)에 올린 추천을 그날로 적으면 기준가가 '직전 거래일 종가'가
+    된다(이미 아는 가격으로 사는 셈). 또 라운드일(그 주 첫 거래일)과 날짜가 어긋나
+    데일리가 미추천 패널티를 매긴다. 2026-10-05(개천절 대체휴일)부터 적용."""
+    for _ in range(15):
+        if is_krx_session(d):
+            return d
+        d += datetime.timedelta(days=1)
+    return d
+
+
+_Q_RE = re.compile(r"(\d{2})년\s*(\d)\s*분기")
+
+
+def quarter_key(d: datetime.date):
+    return (d.year % 100, (d.month - 1) // 3 + 1)
+
+
+def prev_quarter_key(key):
+    yy, q = key
+    return (yy - 1, 4) if q == 1 else (yy, q - 1)
+
+
+def quarter_tabs(ss):
+    """{(yy, q): worksheet}. '테스트' 탭과 '_' 시스템 탭은 제외."""
+    out = {}
+    for w in ss.worksheets():
+        if w.title.startswith("_") or "테스트" in w.title:
+            continue
+        m = _Q_RE.search(w.title)
+        if m:
+            k = (int(m.group(1)), int(m.group(2)))
+            # 같은 분기 이름의 사본('... 사본' 등)이 있으면 제목이 짧은 쪽을 정본으로 본다
+            if k not in out or len(w.title) < len(out[k].title):
+                out[k] = w
+    return out
+
+
+def ensure_quarter_tab(ss, key):
+    """key 분기 탭이 없으면 직전 분기 탭을 복제해 만든다.
+    종목(J~N)·실현(P~U) 칸만 비우고 나머지 양식·수식은 그대로 둔다.
+    데일리(update_gsheets.ensure_quarter_sheet)와 같은 규칙 — 먼저 도는 쪽이 만든다."""
+    tabs = quarter_tabs(ss)
+    if key in tabs:
+        return tabs[key], False
+    src = tabs.get(prev_quarter_key(key))
+    if src is None:
+        return None, False
+    yy, q = key
+    pyy, pq = prev_quarter_key(key)
+    title = src.title.replace(f"{pyy}년 {pq}분기", f"{yy}년 {q}분기")
+    if title == src.title:
+        title = _Q_RE.sub(f"{yy}년 {q}분기", src.title)
+    n = len(ss.worksheets())
+    try:
+        new = ss.duplicate_sheet(src.id, insert_sheet_index=n, new_sheet_name=title)
+    except Exception:
+        # 데일리가 같은 순간 먼저 만들었으면 이름 충돌 — 다시 찾아본다
+        tabs = quarter_tabs(ss)
+        if key in tabs:
+            return tabs[key], False
+        raise
+    vals = new.get_all_values()
+    ranges = []
+    for b in find_person_blocks(vals):
+        ranges.append(f"J{b['row_start']}:N{b['row_end']}")
+        ranges.append(f"P{b['row_start']}:U{b['row_end']}")
+    if ranges:
+        new.batch_clear(ranges)
+    # 제목성 텍스트('26년 3분기')만 바꾼다. 수식 셀은 건드리지 않는다.
+    try:
+        fv = new.get_values(value_render_option="FORMULA")
+        fixes = []
+        old_tag, new_tag = f"{pyy}년 {pq}분기", f"{yy}년 {q}분기"
+        for i, row in enumerate(fv, start=1):
+            for j, v in enumerate(row, start=1):
+                if isinstance(v, str) and not v.startswith("=") and old_tag in v:
+                    fixes.append(gspread.Cell(i, j, v.replace(old_tag, new_tag)))
+        if fixes:
+            new.update_cells(fixes, value_input_option="USER_ENTERED")
+    except Exception:
+        pass
+    return new, True
 
 
 def find_person_blocks(all_values: list) -> list:
@@ -808,29 +918,64 @@ def sheet_retry(fn, what="시트 작업", tries=4):
 
 
 class SheetCache:
+    """분기 탭별 캐시. 예전엔 기동 시 고른 '맨 뒤 탭' 하나를 계속 붙잡고 있어서,
+    분기가 바뀌어 새 탭이 생겨도 재시작 전까지 옛 분기 탭에 기록했다."""
+    TAB_TTL = 600   # 탭 목록 재조회 주기(초)
+
     def __init__(self):
         self.ss = None
-        self.ws = None
-        self.values = None
-        self.loaded_at = 0
+        self.tabs = {}
+        self.tabs_at = 0
+        self.vals = {}      # title -> (values, loaded_at)
 
     def get_ss(self):
         if self.ss is None:
             self.ss = sheet_retry(open_spreadsheet, "스프레드시트 열기")
         return self.ss
 
-    def ensure(self):
-        if self.ss is None:
-            self.ss = sheet_retry(open_spreadsheet, "스프레드시트 열기")
-            self.ws = sheet_retry(lambda: get_worksheet(self.ss), "워크시트 선택")
-        if self.values is None or (time.time() - self.loaded_at) > SHEET_TTL:
-            self.values = sheet_retry(self.ws.get_all_values, "시트 읽기")
-            self.loaded_at = time.time()
-        return self.ws, self.values
+    def _tabs(self, force=False):
+        if force or not self.tabs or (time.time() - self.tabs_at) > self.TAB_TTL:
+            self.tabs = sheet_retry(lambda: quarter_tabs(self.get_ss()), "분기 탭 조회")
+            self.tabs_at = time.time()
+        return self.tabs
 
-    def refresh(self):
-        self.values = sheet_retry(self.ws.get_all_values, "시트 재읽기")
-        self.loaded_at = time.time()
+    def tab(self, key, create=False):
+        ws = self._tabs().get(key) or self._tabs(force=True).get(key)
+        if ws is None and create:
+            ws, made = sheet_retry(lambda: ensure_quarter_tab(self.get_ss(), key), "분기 탭 생성")
+            if ws is not None:
+                self._tabs(force=True)
+                if made:
+                    notify_admin(f"🆕 {ws.title} 탭을 새로 만들었습니다 "
+                                 f"(직전 분기 탭 복제, 종목·실현 칸 비움)")
+                    log(f"[분기탭 생성] {ws.title}")
+        return ws
+
+    def values(self, ws, fresh=False):
+        hit = self.vals.get(ws.title)
+        if fresh or hit is None or (time.time() - hit[1]) > SHEET_TTL:
+            v = sheet_retry(ws.get_all_values, "시트 읽기")
+            self.vals[ws.title] = (v, time.time())
+            return v
+        return hit[0]
+
+    def refresh(self, ws):
+        return self.values(ws, fresh=True)
+
+    def ensure(self, d=None):
+        """기록 대상 탭(d가 속한 분기)과 값. 탭이 없으면 직전 분기를 복제해 만든다."""
+        key = quarter_key(d or today_kst())
+        ws = self.tab(key, create=True)
+        if ws is None:
+            return None, None
+        return ws, self.values(ws)
+
+    def prev(self, d=None):
+        """직전 분기 탭과 값(없으면 None, None). 분기 전환 직후 이전 분기 보유분 매도용."""
+        ws = self.tab(prev_quarter_key(quarter_key(d or today_kst())))
+        if ws is None:
+            return None, None
+        return ws, self.values(ws)
 
 
 def handle_message(msg: dict, cache: SheetCache):
@@ -864,8 +1009,18 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"※ 멤버 매핑 안 됨 → 자동기록 안 함")
             log(f"[매수-미매핑] id={sid}")
             return
-        ws, values = cache.ensure()
-        stock, why = resolve_stock(text, history=past_labels(values, member))
+        rec_day = next_krx_session(today_kst())
+        ws, values = cache.ensure(rec_day)
+        if ws is None:
+            notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
+                         f"※ {rec_day} 분기 탭을 찾지도 만들지도 못함 → 자동기록 안 함")
+            log(f"[매수-탭없음] {member} {rec_day} | 원문: {body}")
+            return
+        pws, pvals = cache.prev(rec_day)
+        hist = past_labels(values, member)
+        if pvals:
+            hist += [h for h in past_labels(pvals, member) if h not in hist]
+        stock, why = resolve_stock(text, history=hist)
         if not stock:
             notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
                          f"※ 종목명 자동인식 실패 → 자동기록 안 함(수동 확정 필요)\n"
@@ -873,6 +1028,9 @@ def handle_message(msg: dict, cache: SheetCache):
             log(f"[매수-미인식] {member}: {why}")
             return
         dup = find_active_dup(values, member, stock)
+        if not dup and pvals:
+            pd_ = find_active_dup(pvals, member, stock)
+            dup = f"[{pws.title}] {pd_}" if pd_ else ""
         if dup:
             notify_admin(f"⚠️ 매수 감지 — {member} / {stock}\n원문: {body}\n"
                          f"※ 이미 활성 보유 중: {dup}\n"
@@ -880,9 +1038,12 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"batch_add allow_dup=true로 수동 추가)\n근거: {why}")
             log(f"[매수-중복보류] {member}/{stock}: {dup} | 근거: {why} | 원문: {body}")
             return
-        ok, result = add_stock(ws, values, member, stock, today_kst())
+        ok, result = add_stock(ws, values, member, stock, rec_day)
         if ok:
-            cache.refresh()
+            cache.refresh(ws)
+            result = f"[{ws.title}] {result}"
+            if rec_day != today_kst():
+                result += f"\n※ 휴장일 추천 → 추천일을 다음 거래일 {rec_day}로 기록"
         icon = "✅" if ok else "❌"
         notify_admin(f"{icon} 매수 자동기록 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
         # 원문을 함께 남긴다. 예전엔 미인식 건만 원문을 찍어서, 엉뚱한 종목이
@@ -896,8 +1057,12 @@ def handle_message(msg: dict, cache: SheetCache):
             log(f"[매도-미매핑] id={sid}")
             return
         # 매도는 보유 종목 중에서 고르는 일이므로 후보를 보유분으로 좁힌다.
+        # 분기 전환 직후엔 직전 분기 보유분(최장 한 달)이 남아 있다. 두 탭을 함께 본다.
         ws, values = cache.ensure()
-        held = active_holdings(values, member)
+        pws, pvals = cache.prev()
+        held_cur = active_holdings(values, member) if values else []
+        held_prev = active_holdings(pvals, member) if pvals else []
+        held = held_prev + [h for h in held_cur if h not in held_prev]
         stock, why = resolve_stock(text, holdings=held)
         if not stock:
             notify_admin(f"🔴 매도 감지 — {member}\n원문: {body}\n"
@@ -906,9 +1071,19 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"보유 중: {', '.join(held) if held else '없음'}")
             log(f"[매도-미인식] {member}: {why}")
             return
-        ok, result = sell_stock(ws, values, member, stock, today_kst(), cache)
-        if ok:
-            cache.refresh()
+        # '가장 과거 1건' 규칙 — 직전 분기 탭에 있으면 그쪽부터 판다
+        ok, result = False, "보유 탭 없음"
+        for tws, tvals in ((pws, pvals), (ws, values)):
+            if tws is None or not tvals:
+                continue
+            ok, result = sell_stock(tws, tvals, member, stock, today_kst(), cache)
+            if ok:
+                cache.refresh(tws)
+                result = f"[{tws.title}] {result}"
+                break
+            if "활성 종목을 찾을 수 없음" not in result and "블록을 찾을 수 없음" not in result:
+                result = f"[{tws.title}] {result}"
+                break   # 그 탭에서 찾았는데 실패(빈 행 없음 등) — 다른 분기 탭으로 넘기지 않는다
         icon = "✅" if ok else "❌"
         notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
         log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result} | 근거: {why} | 원문: {body}")
@@ -966,6 +1141,13 @@ def main():
     notify_admin(f"🟢 한탕 실시간 리스너 가동 (@{bot.get('username')})")
 
     cache = SheetCache()
+    if not COLLECT_MODE:
+        # 분기 첫 라운드 전에 탭을 미리 만들어 둔다(휴장일 밤에 올린 추천도 바로 기록되게).
+        try:
+            w0, _ = cache.ensure(next_krx_session(today_kst()))
+            log(f"기록 대상 탭: {w0.title if w0 else '없음'}")
+        except Exception as e:
+            log(f"[경고] 분기 탭 준비 실패: {e}")
     if COLLECT_MODE:
         load_seen_from_sheet(cache)
         log(f"기존 수집 인원: {len(_seen_senders)}명")
@@ -996,7 +1178,7 @@ def main():
                                                  "Connection", "Unavailable")):
                         log(f"[재시도] handle_message 통째 재실행: {e}")
                         time.sleep(5)
-                        cache.ss = cache.ws = cache.values = None
+                        cache = SheetCache()
                         try:
                             handle_message(msg, cache)
                             continue

@@ -24,12 +24,25 @@ SCOPES = [
 ]
 
 
-def get_worksheet():
+def get_worksheet(rec_date=None):
+    """대상 탭: rec_date가 속한 분기 탭. 없으면 맨 뒤 탭.
+    분기 전환기(예: 10월 초)엔 직전 분기 정정도 잦다. 예전엔 무조건 맨 뒤 탭이라
+    3분기 정정을 4분기 탭에 써버릴 수 있었다. 3분기 건은 rec_date를 3분기 날짜로 준다."""
     info = json.loads(os.environ["GSHEETS_CREDENTIALS"])
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     gc = gspread.authorize(creds)
     ss = sheet_retry(lambda: gc.open_by_key(os.environ["GSHEETS_ID"]),
                      "스프레드시트 열기")
+    if rec_date is not None:
+        try:
+            from telegram_listener_realtime import quarter_tabs, quarter_key
+            d = rec_date if isinstance(rec_date, datetime.date) else \
+                datetime.date.fromisoformat(str(rec_date)[:10])
+            ws = sheet_retry(lambda: quarter_tabs(ss), "분기 탭 조회").get(quarter_key(d))
+            if ws is not None:
+                return ws
+        except Exception as e:
+            print(f"[주의] 분기 탭 판별 실패({e}) → 맨 뒤 탭")
     sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
               if not s.title.startswith("_")]
     return sheets[-1]
@@ -153,11 +166,14 @@ def add_stock(ws, all_values, person_name, stock_name, rec_date,
 
 
 def get_rec_date(date_str=None):
-    """명시적 날짜가 있으면 그대로 사용, 없으면 이번 주 월요일"""
+    """명시적 날짜가 있으면 그대로 사용, 없으면 이번 주 라운드일(그 주 첫 거래일).
+    예전엔 '이번 주 월요일' 고정이라 월요일 휴장 주(2026-10-05 등)엔 휴장일이
+    추천일로 들어가 기준가가 직전 거래일 종가가 되고 라운드 판정도 어긋났다."""
     if date_str:
         return datetime.date.fromisoformat(date_str)
-    d = datetime.date.today()
-    return d - datetime.timedelta(days=d.weekday())
+    from telegram_listener_realtime import next_krx_session
+    d = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).date()
+    return next_krx_session(d - datetime.timedelta(days=d.weekday()))
 
 
 def rename_stock(ws, all_values, person_name, old_name, new_name, dry_run=False):
@@ -436,8 +452,8 @@ def run():
     print(f"입력 종목: {len(pairs)}건 / 교정: {len(renames)}건 / 삭제: {len(removes)}건")
     print("=" * 60 + "\n")
 
-    ws = get_worksheet()
-    print(f"대상 시트: {ws.title}\n")
+    ws = get_worksheet(rec_date)
+    print(f"대상 시트: {ws.title}  (추천일 {rec_date} 기준 분기)\n")
     all_vals = ws.get_all_values()
 
     fails = 0

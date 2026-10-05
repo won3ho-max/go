@@ -127,9 +127,33 @@ def manual_sell(person_name: str, stock_name: str, sell_date: str, sell_price: f
     sheets = [s for s in sheet_retry(ss.worksheets, "시트 목록 조회")
               if not s.title.startswith("_")]
     ws = sheets[-1]
+    all_values = ws.get_all_values()
+    # 분기 전환기: 직전 분기 탭에 같은 종목이 활성으로 있으면 그쪽부터(가장 과거 1건 규칙).
+    # 예전엔 맨 뒤 탭만 봐서 3분기 보유분을 4분기 시작 후 팔 수 없었다.
+    try:
+        from telegram_listener_realtime import quarter_tabs, quarter_key, prev_quarter_key
+        tabs = quarter_tabs(ss)
+        today_k = quarter_key(datetime.date.fromisoformat(sell_date[:10]))
+        for key in (prev_quarter_key(today_k), today_k):
+            cand = tabs.get(key)
+            if cand is None:
+                continue
+            vals = cand.get_all_values()
+            hit = False
+            for b in find_person_blocks(vals):
+                if person_name in b["person"]:
+                    for r in range(b["row_start"], b["row_end"] + 1):
+                        if r - 1 < len(vals) and len(vals[r - 1]) > 9 \
+                                and stock_name in str(vals[r - 1][9]):
+                            hit = True
+                            break
+            if hit:
+                ws, all_values = cand, vals
+                break
+    except Exception as e:
+        print(f"[주의] 분기 탭 판별 실패({e}) → 맨 뒤 탭")
     print(f"[시트] {ws.title}")
 
-    all_values = ws.get_all_values()
     blocks = find_person_blocks(all_values)
 
     # 대상자 블록 찾기
