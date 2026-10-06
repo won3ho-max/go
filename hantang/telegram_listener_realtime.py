@@ -783,6 +783,51 @@ def resolve_stock_llm(text: str, holdings=None):
         return None
 
 
+def _loose(s: str) -> str:
+    """오타·연결어 흔들림 흡수용 정규화. '&'·'앤'·'엔'·'AND'와 문장부호를 지운다."""
+    s = _norm(s)
+    s = re.sub(r"(&|＆|AND|앤|엔|#|,|:)", "", s)
+    return s
+
+
+def _cover(hb: str, tl: str) -> int:
+    """보유 라벨 hb의 글자 중 원문 tl의 한 구간과 순서대로 맞는 글자 수(최대값).
+    오타 한두 글자는 건너뛰고, 브랜드 접두만 같은 다른 종목은 낮게 나온다."""
+    from difflib import SequenceMatcher
+    w = len(hb) + 2
+    best = 0
+    for st in range(0, max(1, len(tl) - len(hb) + 3)):
+        win = tl[st:st + w]
+        m = sum(b.size for b in SequenceMatcher(None, hb, win, autojunk=False).get_matching_blocks())
+        best = max(best, m)
+    return best
+
+
+def _fuzzy_holding(text: str, holdings):
+    """매도 전용 느슨한 보유종목 대조. 후보가 본인 보유분(보통 1~5개)으로 이미
+    좁혀져 있어서 신규 매수 인식보다 오탐 여지가 훨씬 작다.
+    2026-10-06 김동환 '트럼프 미디어 앤 테크노로지 그룹' — '&'→'앤', '놀'→'노'
+    오타 때문에 보유 중인 '트럼프 미디어 & 테크놀로지 그룹(DJT)'을 못 찾았다.
+    조건: 보유 라벨(5자 이상) 글자의 85% 이상이 원문 한 구간과 순서대로 일치,
+    조건을 넘는 보유종목이 정확히 하나일 때만 채택(둘 이상이면 fail-closed).
+    'KODEX 200' 보유 중 'KODEX 인버스' 매도 같은 브랜드 접두 일치는 62%라 걸러진다."""
+    tl = _loose(text)
+    hits = []
+    for hd in holdings:
+        _, base = _split_stock_label(hd)
+        hb = _loose(base)
+        if len(hb) < 5:
+            continue
+        n = _cover(hb, tl)
+        if n >= 0.85 * len(hb):
+            hits.append((n, len(hb), hd))
+    if len(hits) != 1:
+        return None
+    n, L, hd = hits[0]
+    return (re.sub(r"\([^)]*\)\s*$", "", hd).strip(),
+            f"보유 종목 근사 대조({n}/{L}자 일치)")
+
+
 def resolve_stock(text: str, holdings=None, history=None):
     """종목 확정. 반환: (시트표기 문자열 or None, 판정근거 문자열)
 
@@ -799,10 +844,16 @@ def resolve_stock(text: str, holdings=None, history=None):
     # ① 보유 종목이 원문에 그대로 등장하면 그게 가장 확실하다(매도 경로).
     if holdings:
         tn = _norm(text)
+        exact = False
         for hd in holdings:
             _, base = _split_stock_label(hd)
             if len(base) >= 2 and base in tn:
                 cands.append(("name", re.sub(r"\([^)]*\)\s*$", "", hd).strip(), "보유 종목 대조"))
+                exact = True
+        if not exact:
+            fz = _fuzzy_holding(text, holdings)
+            if fz:
+                cands.append(("name", fz[0], fz[1]))
 
     exch = sorted({m.group(1).upper() for m in _EXCH_TICKER_RE.finditer(text)})
     if len(exch) == 1:
