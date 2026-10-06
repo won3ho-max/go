@@ -1140,6 +1140,76 @@ def handle_message(msg: dict, cache: SheetCache):
         log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result} | 근거: {why} | 원문: {body}")
 
 
+# ── 기동 시 1회 작업(OPS) ─────────────────────────────────────────────────
+# 작업 세션 PAT에 workflow_dispatch·workflow 권한이 없을 때 시트에 쓰는 유일한 통로.
+# 리스너 파일을 push하면 배포 워크플로가 VM에서 재기동시키고, 기동 직후 아래 목록을
+# 한 번씩 실행한다. 실행한 id는 VM 로컬 파일에 남겨 재기동해도 반복하지 않는다.
+#   op=sell : sell_stock()과 동일 규칙(가장 위 매칭 1건 → 실현, _pending_sell 등록 →
+#             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
+# 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
+STARTUP_OPS = [
+    {"id": "20261006-kdh-djt", "op": "sell", "dry": False, "expect": "(DJT)",
+     "person": "김동환", "stock": "트럼프 미디어 & 테크놀로지 그룹",
+     "sell_date": "2026-10-06", "quarter": (26, 3),
+     "why": "10/6 '3분기 #매도 #트럼프 미디어 앤 테크노로지 그룹' 미인식 건"},
+]
+OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
+
+
+def run_startup_ops(cache):
+    try:
+        done = set(OPS_DONE_FILE.read_text().split()) if OPS_DONE_FILE.exists() else set()
+    except Exception:
+        done = set()
+    for op in STARTUP_OPS:
+        oid = op.get("id")
+        if not oid or oid in done:
+            continue
+        try:
+            ws = cache.tab(tuple(op["quarter"]))
+            if ws is None:
+                raise RuntimeError(f"{op['quarter']} 탭 없음")
+            vals = cache.values(ws, fresh=True)
+            person, stock = op["person"], op["stock"]
+            sd = datetime.date.fromisoformat(op["sell_date"])
+            held = active_holdings(vals, person)
+            t_code, t_base = _split_stock_label(stock)
+            hits = []
+            for b in find_person_blocks(vals):
+                if b["person"] == person or person in b["person"]:
+                    for r in range(b["row_start"], b["row_end"] + 1):
+                        row = vals[r - 1] if r - 1 < len(vals) else []
+                        j = row[9] if len(row) > 9 else ""
+                        if not j:
+                            continue
+                        j_code, j_base = _split_stock_label(j)
+                        if (t_code and t_code == j_code) or (
+                                len(t_base) >= 2 and len(j_base) >= 2
+                                and (t_base in j_base or j_base in t_base)):
+                            hits.append((r, row[9:14]))
+            desc = "; ".join(f"J{r} {v}" for r, v in hits) or "없음"
+            if op.get("dry", True):
+                msg = (f"🧪 [OPS 드라이런] {oid}\n탭: {ws.title}\n{person} 보유: {', '.join(held) or '없음'}\n"
+                       f"매칭: {desc}\n매도일 {sd} (쓰기 없음)")
+            else:
+                # 드라이런 대체 가드: 매칭이 정확히 1건이고 기대 라벨을 포함해야만 쓴다
+                exp = op.get("expect", "")
+                if len(hits) != 1 or (exp and exp not in str(hits[0][1][0])):
+                    raise RuntimeError(f"가드 불통과 — 매칭 {len(hits)}건: {desc} (기대 '{exp}'), 쓰기 안 함")
+                ok, res = sell_stock(ws, vals, person, stock, sd, cache)
+                cache.refresh(ws)
+                msg = f"{'✅' if ok else '❌'} [OPS 매도] {oid}\n[{ws.title}] {res}"
+                if not ok:
+                    raise RuntimeError(res)
+            notify_admin(msg)
+            log(msg.replace("\n", " | "))
+            done.add(oid)
+            OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+        except Exception as e:
+            notify_admin(f"⚠️ [OPS 실패] {oid}: {e}")
+            log(f"[OPS 실패] {oid}: {e}")
+
+
 # ── offset 영속화 (로컬 파일) ─────────────────────────────────────────────
 def load_offset() -> int:
     try:
@@ -1199,6 +1269,7 @@ def main():
             log(f"기록 대상 탭: {w0.title if w0 else '없음'}")
         except Exception as e:
             log(f"[경고] 분기 탭 준비 실패: {e}")
+        run_startup_ops(cache)
     if COLLECT_MODE:
         load_seen_from_sheet(cache)
         log(f"기존 수집 인원: {len(_seen_senders)}명")
