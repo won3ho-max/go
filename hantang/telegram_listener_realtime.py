@@ -1079,9 +1079,9 @@ def handle_message(msg: dict, cache: SheetCache):
             log(f"[매수-미인식] {member}: {why}")
             return
         dup = find_active_dup(values, member, stock)
-        if not dup and pvals:
-            pd_ = find_active_dup(pvals, member, stock)
-            dup = f"[{pws.title}] {pd_}" if pd_ else ""
+        # 중복 판정은 '기록할 분기 탭' 안에서만 한다. 분기가 바뀌면 점수도 새로 시작하므로
+        # 직전 분기 보유분과 같은 종목을 새 분기에 추천하는 건 정상이다.
+        # (2026-10-12 이원호 KODEX 미국10년국채선물 — 3분기 보유분 때문에 보류됐던 사고)
         if dup:
             notify_admin(f"⚠️ 매수 감지 — {member} / {stock}\n원문: {body}\n"
                          f"※ 이미 활성 보유 중: {dup}\n"
@@ -1148,10 +1148,11 @@ def handle_message(msg: dict, cache: SheetCache):
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
-    {"id": "20261006-kdh-djt", "op": "sell", "dry": False, "expect": "(DJT)",
-     "person": "김동환", "stock": "트럼프 미디어 & 테크놀로지 그룹",
-     "sell_date": "2026-10-06", "quarter": (26, 3),
-     "why": "10/6 '3분기 #매도 #트럼프 미디어 앤 테크노로지 그룹' 미인식 건"},
+    # 처리 완료: 20261006-kdh-djt (김동환 DJT 3분기 매도)
+    {"id": "20261012-lwh-kodex10y", "op": "buy",
+     "person": "이원호", "stock": "KODEX 미국10년국채선물",
+     "rec_date": "2026-10-12", "quarter": (26, 4),
+     "why": "10/12 직전 분기 보유분을 중복으로 오판해 보류된 건"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
@@ -1171,6 +1172,22 @@ def run_startup_ops(cache):
                 raise RuntimeError(f"{op['quarter']} 탭 없음")
             vals = cache.values(ws, fresh=True)
             person, stock = op["person"], op["stock"]
+            if op.get("op") == "buy":
+                # 가드: 그 분기 탭에 같은 종목이 이미 활성이면 쓰지 않는다(재실행 대비)
+                d = datetime.date.fromisoformat(op["rec_date"])
+                dup = find_active_dup(vals, person, stock)
+                if dup:
+                    raise RuntimeError(f"이미 기록됨: {dup}, 쓰기 안 함")
+                ok, res = add_stock(ws, vals, person, stock, d)
+                cache.refresh(ws)
+                if not ok:
+                    raise RuntimeError(res)
+                msg = f"✅ [OPS 매수] {oid}\n[{ws.title}] {res} (추천일 {d})"
+                notify_admin(msg)
+                log(msg.replace("\n", " | "))
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
             sd = datetime.date.fromisoformat(op["sell_date"])
             held = active_holdings(vals, person)
             t_code, t_base = _split_stock_label(stock)
