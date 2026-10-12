@@ -305,6 +305,27 @@ def find_active_dup(all_values, person_name, stock_name):
     return ""
 
 
+def dup_on_date(all_values, person_name, stock_name, rec_date) -> bool:
+    """같은 종목이 같은 추천일로 이미 활성에 있으면 True (메시지 중복 전송·재실행 방지).
+    find_active_dup은 첫 매칭 1건만 돌려줘서 날짜 비교용으로 못 쓴다."""
+    t_code, t_base = _split_stock_label(stock_name)
+    for b in find_person_blocks(all_values):
+        if not (b["person"] == person_name or person_name in b["person"]):
+            continue
+        for r in range(b["row_start"], b["row_end"] + 1):
+            row = all_values[r - 1] if r - 1 < len(all_values) else []
+            j = row[9] if len(row) > 9 else ""
+            k = row[10] if len(row) > 10 else ""
+            if not j or str(rec_date) not in str(k):
+                continue
+            j_code, j_base = _split_stock_label(str(j))
+            if (t_code and t_code == j_code) or (
+                    len(t_base) >= 2 and len(j_base) >= 2
+                    and (t_base == j_base or t_base in j_base or j_base in t_base)):
+                return True
+    return False
+
+
 def active_holdings(all_values, person_name):
     """해당 멤버가 현재 활성(J열)으로 들고 있는 종목명 목록(중복 제거)."""
     blocks = find_person_blocks(all_values)
@@ -1082,6 +1103,12 @@ def handle_message(msg: dict, cache: SheetCache):
         # 중복 판정은 '기록할 분기 탭' 안에서만 한다. 분기가 바뀌면 점수도 새로 시작하므로
         # 직전 분기 보유분과 같은 종목을 새 분기에 추천하는 건 정상이다.
         # (2026-10-12 이원호 KODEX 미국10년국채선물 — 3분기 보유분 때문에 보류됐던 사고)
+        # '#재추천' 태그는 멤버가 같은 종목을 다시 추천한다고 명시한 것이다.
+        # 그래도 같은 추천일로 이미 들어가 있으면(메시지 중복 전송) 막는다.
+        # (2026-10-12 김태완 '#재추천 #한화솔루션'이 보류됐던 건 — 운영자: 정당한 재추천)
+        if dup and "#재추천" in text and not dup_on_date(values, member, stock, rec_day):
+            why += f" | #재추천 태그 → 기존 보유({dup})와 별도로 기록"
+            dup = ""
         if dup:
             notify_admin(f"⚠️ 매수 감지 — {member} / {stock}\n원문: {body}\n"
                          f"※ 이미 활성 보유 중: {dup}\n"
@@ -1149,10 +1176,11 @@ def handle_message(msg: dict, cache: SheetCache):
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
     # 처리 완료: 20261006-kdh-djt (김동환 DJT 3분기 매도)
-    {"id": "20261012-lwh-kodex10y", "op": "buy",
-     "person": "이원호", "stock": "KODEX 미국10년국채선물",
+    # 처리 완료: 20261012-lwh-kodex10y (이원호 KODEX 미국10년국채선물 4분기 기록)
+    {"id": "20261012-ktw-hanwhasol", "op": "buy", "allow_dup": True,
+     "person": "김태완", "stock": "한화솔루션",
      "rec_date": "2026-10-12", "quarter": (26, 4),
-     "why": "10/12 직전 분기 보유분을 중복으로 오판해 보류된 건"},
+     "why": "10/12 '#재추천 #한화솔루션' 중복보류 건 — 운영자 확인: 정당한 재추천"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
@@ -1176,7 +1204,7 @@ def run_startup_ops(cache):
                 # 가드: 그 분기 탭에 같은 종목이 이미 활성이면 쓰지 않는다(재실행 대비)
                 d = datetime.date.fromisoformat(op["rec_date"])
                 dup = find_active_dup(vals, person, stock)
-                if dup:
+                if dup and (not op.get("allow_dup") or dup_on_date(vals, person, stock, d)):
                     raise RuntimeError(f"이미 기록됨: {dup}, 쓰기 안 함")
                 ok, res = add_stock(ws, vals, person, stock, d)
                 cache.refresh(ws)
