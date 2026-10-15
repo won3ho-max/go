@@ -1149,22 +1149,46 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"보유 중: {', '.join(held) if held else '없음'}")
             log(f"[매도-미인식] {member}: {why}")
             return
-        # '가장 과거 1건' 규칙 — 직전 분기 탭에 있으면 그쪽부터 판다
-        ok, result = False, "보유 탭 없음"
-        for tws, tvals in ((pws, pvals), (ws, values)):
-            if tws is None or not tvals:
-                continue
-            ok, result = sell_stock(tws, tvals, member, stock, today_kst(), cache)
-            if ok:
-                cache.refresh(tws)
-                result = f"[{tws.title}] {result}"
-                break
-            if "활성 종목을 찾을 수 없음" not in result and "블록을 찾을 수 없음" not in result:
-                result = f"[{tws.title}] {result}"
-                break   # 그 탭에서 찾았는데 실패(빈 행 없음 등) — 다른 분기 탭으로 넘기지 않는다
+        sell_all = bool(_SELL_ALL_RE.search(text))
+        ok, result = sell_across(cache, member, stock, today_kst(), sell_all=sell_all)
+        if sell_all:
+            why += " | 전량 표현 감지 → 같은 종목 보유분 전부 매도"
         icon = "✅" if ok else "❌"
         notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
         log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result} | 근거: {why} | 원문: {body}")
+
+
+# '전량' 의도 표현. 같은 종목을 여러 번 추천해 여러 줄 들고 있을 때 한 메시지로 다 판다.
+# (2026-10-15 안병열 '아이크래프트 2단위 다 매도'가 1건만 팔렸던 건)
+_SELL_ALL_RE = re.compile(r"(전량|전부|모두|몽땅|싹\s*다|둘\s*다|두\s*개|두\s*단위|\d+\s*단위|다\s*(?:매도|팔|정리|청산))")
+
+
+def sell_across(cache, member, stock, sell_date, sell_all=False):
+    """직전 분기 → 현재 분기 순(가장 과거부터)으로 판다. sell_all이면 매칭이 없어질
+    때까지 반복한다. 반환: (하나라도 성공, 결과 문자열)."""
+    done, last = [], "보유 탭 없음"
+    for _ in range(10 if sell_all else 1):
+        sold = False
+        for tws, _v in (cache.prev(), cache.ensure()):
+            if tws is None:
+                continue
+            tvals = cache.values(tws, fresh=bool(done))
+            ok, res = sell_stock(tws, tvals, member, stock, sell_date, cache)
+            if ok:
+                cache.refresh(tws)
+                done.append(f"[{tws.title}] {res}")
+                sold = True
+                break
+            if "활성 종목을 찾을 수 없음" not in res and "블록을 찾을 수 없음" not in res:
+                last = f"[{tws.title}] {res}"
+                break   # 그 탭에서 찾았는데 실패(빈 행 없음 등) — 다른 분기 탭으로 넘기지 않는다
+            last = res
+        if not sold:
+            break
+    if not done:
+        return False, last
+    head = f"총 {len(done)}건 매도\n" if len(done) > 1 else ""
+    return True, head + "\n".join(done)
 
 
 # ── 기동 시 1회 작업(OPS) ─────────────────────────────────────────────────
@@ -1177,10 +1201,10 @@ def handle_message(msg: dict, cache: SheetCache):
 STARTUP_OPS = [
     # 처리 완료: 20261006-kdh-djt (김동환 DJT 3분기 매도)
     # 처리 완료: 20261012-lwh-kodex10y (이원호 KODEX 미국10년국채선물 4분기 기록)
-    {"id": "20261012-ktw-hanwhasol", "op": "buy", "allow_dup": True,
-     "person": "김태완", "stock": "한화솔루션",
-     "rec_date": "2026-10-12", "quarter": (26, 4),
-     "why": "10/12 '#재추천 #한화솔루션' 중복보류 건 — 운영자 확인: 정당한 재추천"},
+    # 처리 완료: 20261012-ktw-hanwhasol (김태완 한화솔루션 재추천 기록)
+    {"id": "20261015-abr-icraft-rest", "op": "sell_rest", "expect_count": 1,
+     "person": "안병열", "stock": "아이크래프트", "sell_date": "2026-10-15",
+     "why": "10/15 '아이크래프트 2단위 다 매도' 중 1건만 처리된 건 — 남은 1건 매도"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
@@ -1195,6 +1219,35 @@ def run_startup_ops(cache):
         if not oid or oid in done:
             continue
         try:
+            if op.get("op") == "sell_rest":
+                # 가드: 직전+현재 분기에 남은 매칭이 정확히 expect_count건일 때만 전부 판다
+                person, stock = op["person"], op["stock"]
+                cnt, where = 0, []
+                for tws, tv in (cache.prev(), cache.ensure()):
+                    if tws is None:
+                        continue
+                    tv = cache.values(tws, fresh=True)
+                    hits = [h for h in active_holdings(tv, person) if _split_stock_label(h)[1] == _split_stock_label(stock)[1]]
+                    rows = sum(1 for b in find_person_blocks(tv) if person in b["person"]
+                               for r in range(b["row_start"], b["row_end"] + 1)
+                               if r - 1 < len(tv) and len(tv[r - 1]) > 9 and tv[r - 1][9]
+                               and _split_stock_label(tv[r - 1][9])[1] == _split_stock_label(stock)[1])
+                    cnt += rows
+                    if rows:
+                        where.append(f"{tws.title} {rows}건")
+                if cnt != op.get("expect_count", 1):
+                    raise RuntimeError(f"가드 불통과 — 남은 보유 {cnt}건({', '.join(where) or '없음'}), "
+                                       f"기대 {op.get('expect_count', 1)}건. 쓰기 안 함")
+                ok, res = sell_across(cache, person, stock,
+                                      datetime.date.fromisoformat(op["sell_date"]), sell_all=True)
+                if not ok:
+                    raise RuntimeError(res)
+                msg = f"✅ [OPS 매도] {oid}\n{res}"
+                notify_admin(msg)
+                log(msg.replace("\n", " | "))
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
             ws = cache.tab(tuple(op["quarter"]))
             if ws is None:
                 raise RuntimeError(f"{op['quarter']} 탭 없음")
