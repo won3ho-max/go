@@ -1111,11 +1111,12 @@ def handle_message(msg: dict, cache: SheetCache):
         # 중복 판정은 '기록할 분기 탭' 안에서만 한다. 분기가 바뀌면 점수도 새로 시작하므로
         # 직전 분기 보유분과 같은 종목을 새 분기에 추천하는 건 정상이다.
         # (2026-10-12 이원호 KODEX 미국10년국채선물 — 3분기 보유분 때문에 보류됐던 사고)
-        # '#재추천' 태그는 멤버가 같은 종목을 다시 추천한다고 명시한 것이다.
-        # 그래도 같은 추천일로 이미 들어가 있으면(메시지 중복 전송) 막는다.
-        # (2026-10-12 김태완 '#재추천 #한화솔루션'이 보류됐던 건 — 운영자: 정당한 재추천)
-        if dup and "#재추천" in text and not dup_on_date(values, member, stock, rec_day):
-            why += f" | #재추천 태그 → 기존 보유({dup})와 별도로 기록"
+        # 같은 분기에 같은 종목을 이미 들고 있어도, 추천일이 다르면 재추천으로 기록한다.
+        # 규칙상 같은 종목 연속 추천이 허용되고, 보류했던 건은 매번 운영자가 '정당한
+        # 재추천'으로 확인했다(10/12 김태완 한화솔루션, 10/19 이광훈 대주전자재료).
+        # 같은 추천일로 이미 있으면(메시지 중복 전송) 그대로 막는다.
+        if dup and not dup_on_date(values, member, stock, rec_day):
+            why += f" | 재추천 → 기존 보유({dup})와 별도로 기록"
             dup = ""
         if dup:
             notify_admin(f"⚠️ 매수 감지 — {member} / {stock}\n원문: {body}\n"
@@ -1208,10 +1209,11 @@ def sell_across(cache, member, stock, sell_date, sell_all=False):
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
     # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest
-    # 처리 완료: 20261019-daily-test (밀린 자동매도 4건 처리 확인)
-    {"id": "20261019-daily-group", "op": "dispatch", "workflow": "daily_report.yml",
-     "inputs": {"test_mode": "false"},
-     "why": "정정된 3분기 카드 단톡방 재발송(ops/card_only.json으로 3분기만)"},
+    # 처리 완료: 20261019-daily-test, 20261019-daily-group (3분기 카드 재발송)
+    {"id": "20261019-lkh-daejoo", "op": "buy", "allow_dup": True,
+     "person": "이광훈", "stock": "대주전자재료",
+     "rec_date": "2026-10-19", "quarter": (26, 4),
+     "why": "10/19 대주전자재료 재추천 중복보류 건 — 운영자 확인: 재추천"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
