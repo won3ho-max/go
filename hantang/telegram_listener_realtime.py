@@ -1208,9 +1208,10 @@ def sell_across(cache, member, stock, sell_date, sell_all=False):
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
     # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest
-    {"id": "20261019-daily-test", "op": "dispatch", "workflow": "daily_report.yml",
-     "inputs": {"test_mode": "true"},
-     "why": "조형오 실현 칸 소진으로 밀린 자동매도 3건 처리 + 3분기 카드 확인(개인 텔레그램)"},
+    # 처리 완료: 20261019-daily-test (밀린 자동매도 4건 처리 확인)
+    {"id": "20261019-daily-group", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "false"},
+     "why": "정정된 3분기 카드 단톡방 재발송(ops/card_only.json으로 3분기만)"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
