@@ -288,6 +288,12 @@ LLM 1차 인식 경로가 죽어 있다. 휴리스틱 단독으로 버티는 중
 - `batch_add`의 대상 탭은 `rec_date`의 분기. 3분기 정정은 `rec_date`를 3분기 날짜로 줘야 3분기 탭에 쓴다. 기본 `rec_date`는 '그 주 첫 거래일'.
 - 휴장일(주말·공휴일)에 올린 추천은 추천일을 **다음 거래일**로 기록. 리스너는 `KRX_HOLIDAYS` 표(2027-10까지)로 판정 — 매년 갱신 필요.
 
+**10-11. 작업 세션에서 시트를 쓰는 통로 = STARTUP_OPS (2026-10-06~)**
+리스너 파일의 `STARTUP_OPS`에 작업을 넣고 push → 배포 워크플로가 VM에서 재기동 → 기동 직후 1회 실행.
+`op`: `sell`·`sell_rest`·`buy`·`dispatch`(VM의 `~/.hantang_dispatch_pat`로 워크플로 실행 — test_mode 데일리 등).
+실행 id는 VM `_ops_done.txt`에 남아 반복 안 함. 결과는 운영자 텔레그램, dispatch 결과는 Actions 로그(읽기 가능)로 확인.
+시트 읽기는 사용자 Chrome(로그인 세션)에서 gviz CSV fetch로 가능.
+
 **10-10. 액션 실행 권한 (2026-10-05)**
 `deploy_token.txt`의 PAT는 push는 되지만 workflow_dispatch가 403(`Resource not accessible by personal access token`).
 이 상태에선 test_mode·sheet_dump·listener_log를 원격에서 못 돌린다. Actions(Read/write) 권한 재부여 필요.
@@ -347,3 +353,5 @@ LLM 1차 인식 경로가 죽어 있다. 휴리스틱 단독으로 버티는 중
 | 09-21 | `[BITX]` 대괄호 티커, 짧은 접두 오탐 차단 |
 | 09-28 | 스마트 따옴표, 괄호 영문약어, 마침표, 기록 건 원문 로깅 |
 | 10-05 | 분기 전환: 4분기 탭 자동 생성, 3·4분기 카드 동시 발송(표식 탭별), 직전 분기 매도, 휴장일 추천일 보정 (`7ce3f07`) |
+| 10-06~15 | 매도 근사대조, 직전분기 중복판정 제거, `#재추천` 자동 기록, 전량 매도, STARTUP_OPS |
+| 10-19 | 실현 칸(14행) 소진 시 행 자동 추가(조형오·어정윤 자동매도 4건 누락 정정), 같은 날 다건 자동매도 행 덮어쓰기 수정, `ops/card_only.json`, OPS dispatch |
