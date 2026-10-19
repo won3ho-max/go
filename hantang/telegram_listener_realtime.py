@@ -384,7 +384,7 @@ def _pending_add(cache, sheet_title, row, name, sell_date):
         log(f"[경고] _pending_sell 기록 실패: {e}")
 
 
-def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache):
+def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown=False):
     """가장 과거(위쪽) 매칭 활성 종목을 실현 섹션으로 이동. manual_sell과 동일 규칙."""
     blocks = find_person_blocks(all_values)
     block = next((b for b in blocks
@@ -429,7 +429,15 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache):
             p_row = r
             break
     if p_row is None:
-        return False, "실현 섹션에 빈 행 없음"
+        # 실현 칸이 꽉 찼으면 블록 마지막 행 앞에 한 줄 끼워 넣고 다시 읽는다
+        # (2026-10-19 조형오 블록 14행 소진 사고). 소계 SUM 범위는 자동으로 늘어난다.
+        if _grown:
+            return False, "실현 섹션에 빈 행 없음(행 추가 후에도)"
+        at = block["row_end"]
+        sheet_retry(lambda: ws.insert_rows([[""]], row=at, inherit_from_before=True), "행 추가")
+        log(f"[행 추가] {person_name} 블록 실현 칸 부족 → 행 {at}에 1행 추가")
+        fresh = sheet_retry(ws.get_all_values, "시트 재읽기")
+        return sell_stock(ws, fresh, person_name, stock_name, sell_date, cache, _grown=True)
 
     try:
         base_f = float(str(base).replace(",", ""))
@@ -1199,12 +1207,10 @@ def sell_across(cache, member, stock, sell_date, sell_all=False):
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
-    # 처리 완료: 20261006-kdh-djt (김동환 DJT 3분기 매도)
-    # 처리 완료: 20261012-lwh-kodex10y (이원호 KODEX 미국10년국채선물 4분기 기록)
-    # 처리 완료: 20261012-ktw-hanwhasol (김태완 한화솔루션 재추천 기록)
-    {"id": "20261015-abr-icraft-rest", "op": "sell_rest", "expect_count": 1,
-     "person": "안병열", "stock": "아이크래프트", "sell_date": "2026-10-15",
-     "why": "10/15 '아이크래프트 2단위 다 매도' 중 1건만 처리된 건 — 남은 1건 매도"},
+    # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest
+    {"id": "20261019-daily-test", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "조형오 실현 칸 소진으로 밀린 자동매도 3건 처리 + 3분기 카드 확인(개인 텔레그램)"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
@@ -1219,6 +1225,21 @@ def run_startup_ops(cache):
         if not oid or oid in done:
             continue
         try:
+            if op.get("op") == "dispatch":
+                # VM 크론이 쓰는 dispatch PAT로 워크플로를 실행한다(작업 세션 PAT엔 권한 없음)
+                pat = Path("/home/won3ho/.hantang_dispatch_pat").read_text().strip()
+                r = requests.post(
+                    f"https://api.github.com/repos/won3ho-max/go/actions/workflows/{op['workflow']}/dispatches",
+                    headers={"Authorization": f"token {pat}", "Accept": "application/vnd.github+json"},
+                    json={"ref": "main", "inputs": op.get("inputs", {})}, timeout=20)
+                if r.status_code != 204:
+                    raise RuntimeError(f"dispatch {r.status_code} {r.text[:200]}")
+                msg = f"▶️ [OPS 워크플로 실행] {oid}: {op['workflow']} {op.get('inputs', {})}"
+                notify_admin(msg)
+                log(msg)
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
             if op.get("op") == "sell_rest":
                 # 가드: 직전+현재 분기에 남은 매칭이 정확히 expect_count건일 때만 전부 판다
                 person, stock = op["person"], op["stock"]

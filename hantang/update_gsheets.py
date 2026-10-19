@@ -470,12 +470,58 @@ def find_person_blocks(all_values: list) -> list:
     return blocks
 
 # ── 시트 처리 ────────────────────────────────────────────────────────────
+def ensure_p_capacity(ws: gspread.Worksheet, needs: dict) -> bool:
+    """멤버 블록의 실현(P~U) 빈 행이 needs[멤버]보다 적으면 블록 안에 행을 끼워 넣는다.
+    2026-10-19 조형오 블록의 실현 칸 14행이 패널티·보너스·매도로 꽉 차서, 기한이 지난
+    3종목(코스맥스비티아이·SOL 조선TOP3플러스레버리지 2건)이 '[오류] P열 빈 행 없음'으로
+    조용히 자동매도를 건너뛰었다. 패널티도 같은 이유로 소리 없이 빠질 수 있었다.
+    블록 마지막 행 '앞'에 끼워 넣어 소계 SUM 범위가 자동으로 늘어나게 한다.
+    아래쪽 블록부터 처리해 위쪽 행 번호가 흔들리지 않게 한다."""
+    if not any(n > 0 for n in needs.values()):
+        return False
+    vals = sheet_retry(ws.get_all_values, "시트 읽기")
+    inserted = False
+    for b in reversed(find_person_blocks(vals)):
+        need = needs.get(b["person"], 0)
+        if need <= 0:
+            continue
+        free = sum(1 for r in range(b["row_start"], b["row_end"] + 1)
+                   if r - 1 >= len(vals) or len(vals[r - 1]) <= 15 or not str(vals[r - 1][15]).strip())
+        short = need - free
+        if short > 0:
+            at = b["row_end"]
+            sheet_retry(lambda: ws.insert_rows([[""]] * short, row=at, inherit_from_before=True),
+                        "행 추가")
+            print(f"    [행 추가] {b['person']} 블록 실현 칸 부족 → {short}행 추가 (행 {at})")
+            inserted = True
+    return inserted
+
+
 def process_sheet(ws: gspread.Worksheet, today: datetime.date):
     print(f"  데이터 로드 중...")
     all_values = sheet_retry(ws.get_all_values, "시트 읽기")
 
+    # 자동매도 대상 수만큼 실현 칸이 있는지 먼저 확인하고 모자라면 행을 늘린다
+    needs = {}
+    for b in find_person_blocks(all_values):
+        for r in range(b["row_start"], b["row_end"] + 1):
+            row = all_values[r - 1] if r - 1 < len(all_values) else []
+            nm = row[9] if len(row) > 9 else ""
+            if not str(nm).strip():
+                continue
+            mk, _ = parse_stock(str(nm).strip())
+            try:
+                rd = datetime.date.fromisoformat(str(row[10])[:10])
+                if mk and calc_sell_date(rd, mk) < today:
+                    needs[b["person"]] = needs.get(b["person"], 0) + 1
+            except Exception:
+                pass
+    if ensure_p_capacity(ws, needs):
+        all_values = sheet_retry(ws.get_all_values, "시트 읽기")
+
     blocks   = find_person_blocks(all_values)
     updates  = []   # (row, col, value) 배치 업데이트용
+    used_p   = set()  # 이번 실행에서 자동매도로 배정한 실현 행
     updated, sold, skipped = [], [], []
 
     # ── 병렬 주가 조회를 위한 사전 스캔 ────────────────────────────────
@@ -582,13 +628,16 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                     ri = r - 1
                     if ri >= len(all_values): break
                     p_val = all_values[ri][15] if len(all_values[ri]) > 15 else ""
-                    if not p_val:
+                    # 같은 실행에서 이미 배정한 행은 건너뛴다. 예전엔 한 블록에서 같은 날
+                    # 2건 이상 자동매도되면 모두 같은 빈 행을 받아 마지막 건만 남았다.
+                    if not p_val and r not in used_p:
                         p_row = r
                         break
 
                 if p_row is None:
                     print(f"    [오류] {person} P열 빈 행 없음")
                     continue
+                used_p.add(p_row)
 
                 sell_price = close_at(market, code, sell_date)
                 if sell_price is None:
@@ -830,6 +879,17 @@ def run_card_and_telegram(today: datetime.date):
         _sheet = "unknown"
     _tag = re.sub(r"[^0-9A-Za-z가-힣]+", "_", _sheet)
     sent_flag = BASE_DIR / f".card_sent_{today}_{_tag}"
+    # 재발송용 필터: ops/card_only.json 의 날짜가 오늘이면 거기 적힌 탭 카드만 보낸다.
+    # (수동 재실행 때 이미 나간 다른 분기 카드가 단톡방에 중복으로 나가지 않게)
+    try:
+        co = json.loads((BASE_DIR / "ops" / "card_only.json").read_text(encoding="utf-8"))
+        if str(co.get("date")) == str(today) and not any(k in _sheet for k in co.get("sheets", [])):
+            print(f"  · card_only 필터 — {_sheet} 카드 건너뜀")
+            return
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"  [주의] card_only 읽기 실패: {e}")
     if sent_flag.exists():
         print("  · 카드 이미 발송됨 — 재발송 건너뜀")
         return
@@ -1092,7 +1152,7 @@ def fix_pending_sells(ss, today: datetime.date):
     return fixed
 
 
-def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime.date):
+def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime.date, _retry=False):
     """주간 라운드 미추천자에게 -10% 패널티 자동 부여.
     규칙: 시트에 존재하는 추천일을 주 단위로 묶어 '그 주 첫 거래일'을 라운드로 보고,
           D<today 인 라운드마다 그날 활성/실현 추천이 없는 멤버에게
@@ -1124,7 +1184,7 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                 except Exception:
                     pass
 
-    applied = []
+    applied, short = [], {}
     for D in sorted(round_days):
         Ds = str(D)
         for b in blocks:
@@ -1152,7 +1212,10 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                     has_penalty = True
                 if (not pp or not str(pp).strip()) and empty_p is None:
                     empty_p = r
-            if recommended or has_penalty or empty_p is None:
+            if recommended or has_penalty:
+                continue
+            if empty_p is None:
+                short[person] = short.get(person, 0) + 1
                 continue
             pr = empty_p
             sheet_retry(lambda: ws.batch_update([
@@ -1170,6 +1233,12 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
             row_local[15], row_local[16], row_local[17] = "미추천(패널티)", Ds, Ds
             row_local[18], row_local[19] = "100", "90"
             applied.append(f"{person} {Ds} 미추천 -10% (실현 R{pr})")
+    # 실현 칸이 꽉 차서 못 쓴 패널티가 있으면 행을 늘리고 한 번 더 돈다(이미 쓴 건 중복 방지로 건너뜀)
+    if short and not _retry:
+        if ensure_p_capacity(ws, short):
+            applied += apply_missed_recommendation_penalties(ws, today, _retry=True)
+    elif short:
+        print(f"  [경고] 패널티 기록 칸 부족 지속: {short}")
     return applied
 
 
