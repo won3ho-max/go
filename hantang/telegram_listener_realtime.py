@@ -1158,10 +1158,25 @@ def handle_message(msg: dict, cache: SheetCache):
                          f"보유 중: {', '.join(held) if held else '없음'}")
             log(f"[매도-미인식] {member}: {why}")
             return
-        sell_all = bool(_SELL_ALL_RE.search(text))
-        ok, result = sell_across(cache, member, stock, today_kst(), sell_all=sell_all)
-        if sell_all:
+        # 한 메시지에 여러 종목을 줄마다 적은 경우(10/29 안병열 '#아모텍 1단위 / #SK하이닉스')
+        # 줄별로 따로 인식해 각각 판다. 예전엔 한 종목만 잡고 나머지는 버렸다.
+        plan = _multi_sell_plan(text, held)
+        if len(plan) >= 2:
+            lines = []
+            ok_any = False
+            for stk, cnt, ln in plan:
+                ok1, res1 = sell_across(cache, member, stk, today_kst(), count=cnt)
+                ok_any = ok_any or ok1
+                lines.append(f"{'✅' if ok1 else '❌'} {stk} ({'전량' if cnt is None else f'{cnt}건'}) ← '{ln}'\n{res1}")
+            notify_admin(f"{'✅' if ok_any else '❌'} 매도 자동처리(복수 종목) — {member}\n원문: {body}\n" + "\n".join(lines))
+            log(f"[매도-복수] {member}: " + " || ".join(x.replace(chr(10), ' ') for x in lines) + f" | 원문: {body}")
+            return
+        cnt = _sell_count(text)
+        ok, result = sell_across(cache, member, stock, today_kst(), count=cnt)
+        if cnt is None:
             why += " | 전량 표현 감지 → 같은 종목 보유분 전부 매도"
+        elif cnt > 1:
+            why += f" | 수량 표현 감지 → {cnt}건 매도"
         icon = "✅" if ok else "❌"
         notify_admin(f"{icon} 매도 자동처리 — {member} / {stock}\n원문: {body}\n{result}\n근거: {why}")
         log(f"[매도-{'처리' if ok else '실패'}] {member}/{stock}: {result} | 근거: {why} | 원문: {body}")
@@ -1169,14 +1184,55 @@ def handle_message(msg: dict, cache: SheetCache):
 
 # '전량' 의도 표현. 같은 종목을 여러 번 추천해 여러 줄 들고 있을 때 한 메시지로 다 판다.
 # (2026-10-15 안병열 '아이크래프트 2단위 다 매도'가 1건만 팔렸던 건)
-_SELL_ALL_RE = re.compile(r"(전량|전부|모두|몽땅|싹\s*다|둘\s*다|두\s*개|두\s*단위|\d+\s*단위|다\s*(?:매도|팔|정리|청산))")
+_SELL_ALL_RE = re.compile(r"(전량|전부|모두|몽땅|싹\s*다|다\s*(?:매도|팔|정리|청산))")
+_KO_NUM = {"한": 1, "하나": 1, "두": 2, "둘": 2, "세": 3, "셋": 3, "네": 4, "넷": 4}
+_UNIT_RE = re.compile(r"(\d+|한|하나|두|둘|세|셋|네|넷)\s*(?:단위|개|건|주|번)")
 
 
-def sell_across(cache, member, stock, sell_date, sell_all=False):
+def _sell_count(seg: str):
+    """매도 수량. 1(기본) / N / None(전량).
+    10/29 안병열 '#아모텍 1단위'를 'N단위=전량'으로 읽어 2건을 다 팔았던 사고 —
+    숫자가 있으면 그 숫자만큼만 판다. '둘 다'는 2."""
+    if re.search(r"둘\s*다", seg):
+        return 2
+    m = _UNIT_RE.search(seg)
+    if m:
+        v = m.group(1)
+        return int(v) if v.isdigit() else _KO_NUM.get(v, 1)
+    if _SELL_ALL_RE.search(seg):
+        return None
+    return 1
+
+
+def _multi_sell_plan(text: str, held):
+    """사유 시작 전 줄들을 한 줄씩 보유종목과 대조. [(종목, 수량, 줄)] — 서로 다른 종목만."""
+    plan, seen = [], set()
+    for ln in (text or "").split("\n")[:8]:
+        t = ln.strip()
+        if not t:
+            continue
+        if re.match(r"^(>|-|\d+[.)]|ㅇ|사유)", t):
+            break
+        body = re.sub(r"#?(종목추천|매도종목|매도|청산|매수|추천)\b", "", t).strip(" #")
+        if len(body) < 2:
+            continue
+        stk, _w = resolve_stock(body, holdings=held)
+        if not stk:
+            continue
+        key = _split_stock_label(stk)[1]
+        if key in seen:
+            continue
+        seen.add(key)
+        plan.append((stk, _sell_count(t), t))
+    return plan
+
+
+def sell_across(cache, member, stock, sell_date, sell_all=False, count=1):
     """직전 분기 → 현재 분기 순(가장 과거부터)으로 판다. sell_all이면 매칭이 없어질
     때까지 반복한다. 반환: (하나라도 성공, 결과 문자열)."""
     done, last = [], "보유 탭 없음"
-    for _ in range(10 if sell_all else 1):
+    n = 10 if (sell_all or count is None) else max(1, int(count))
+    for _ in range(n):
         sold = False
         for tws, _v in (cache.prev(), cache.ensure()):
             if tws is None:
@@ -1210,10 +1266,14 @@ def sell_across(cache, member, stock, sell_date, sell_all=False):
 STARTUP_OPS = [
     # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest
     # 처리 완료: 20261019-daily-test, 20261019-daily-group (3분기 카드 재발송)
-    {"id": "20261019-lkh-daejoo", "op": "buy", "allow_dup": True,
-     "person": "이광훈", "stock": "대주전자재료",
-     "rec_date": "2026-10-19", "quarter": (26, 4),
-     "why": "10/19 대주전자재료 재추천 중복보류 건 — 운영자 확인: 재추천"},
+    # 처리 완료: 20261019-lkh-daejoo
+    {"id": "20261030-abr-amotech-restore", "op": "restore",
+     "person": "안병열", "stock": "아모텍", "rec_date": "2026-10-06",
+     "sell_date": "2026-10-29", "quarter": (26, 4),
+     "why": "10/29 '#아모텍 1단위'를 전량으로 오인해 10/06분까지 팔린 것 되돌림(10/26분 매도는 유지)"},
+    {"id": "20261030-abr-hynix-sell", "op": "sell", "dry": False, "expect": "SK하이닉스",
+     "person": "안병열", "stock": "SK하이닉스", "sell_date": "2026-10-29", "quarter": (26, 4),
+     "why": "10/29 같은 메시지의 '#SK하이닉스' 매도 누락분"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
@@ -1240,6 +1300,38 @@ def run_startup_ops(cache):
                 msg = f"▶️ [OPS 워크플로 실행] {oid}: {op['workflow']} {op.get('inputs', {})}"
                 notify_admin(msg)
                 log(msg)
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
+            if op.get("op") == "restore":
+                # 잘못 매도된 실현 행을 활성으로 되돌린다. 가드: 실현 칸에서 종목·추천일·매도일이
+                # 모두 맞는 행이 정확히 1건이고, 같은 블록에 빈 활성 행이 있을 때만.
+                ws = cache.tab(tuple(op["quarter"]))
+                vals = cache.values(ws, fresh=True)
+                person = op["person"]
+                tb = _split_stock_label(op["stock"])[1]
+                blk = next(b for b in find_person_blocks(vals) if person in b["person"])
+                hits, empty_j = [], None
+                for r in range(blk["row_start"], blk["row_end"] + 1):
+                    row = (vals[r - 1] + [""] * 21)[:21] if r - 1 < len(vals) else [""] * 21
+                    if row[15] and _split_stock_label(row[15])[1] == tb \
+                            and op["rec_date"] in row[16] and op["sell_date"] in row[17]:
+                        hits.append((r, row))
+                    if empty_j is None and not row[9].strip():
+                        empty_j = r
+                if len(hits) != 1 or empty_j is None:
+                    raise RuntimeError(f"가드 불통과 — 실현 매칭 {len(hits)}건, 빈 활성행 {empty_j}. 쓰기 안 함")
+                pr, row = hits[0]
+                jr = empty_j
+                sheet_retry(lambda: ws.batch_update([
+                    {"range": f"J{jr}:N{jr}", "values": [[row[15], row[16], row[18], row[19], f"=(M{jr}-L{jr})/L{jr}"]]},
+                    {"range": f"P{pr}:U{pr}", "values": [["", "", "", "", "", ""]]},
+                ], value_input_option="USER_ENTERED"), "매도 취소")
+                cache.refresh(ws)
+                msg = (f"↩️ [OPS 매도 취소] {oid}\n[{ws.title}] {person} {row[15]} (추천일 {row[16]}) "
+                       f"실현 P{pr} → 활성 J{jr} 복원. 현재가는 다음 데일리가 갱신")
+                notify_admin(msg)
+                log(msg.replace("\n", " | "))
                 done.add(oid)
                 OPS_DONE_FILE.write_text("\n".join(sorted(done)))
                 continue
