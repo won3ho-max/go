@@ -1264,16 +1264,12 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1):
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
-    # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest
-    # 처리 완료: 20261019-daily-test, 20261019-daily-group (3분기 카드 재발송)
-    # 처리 완료: 20261019-lkh-daejoo
-    {"id": "20261030-abr-amotech-restore", "op": "restore",
-     "person": "안병열", "stock": "아모텍", "rec_date": "2026-10-06",
-     "sell_date": "2026-10-29", "quarter": (26, 4),
-     "why": "10/29 '#아모텍 1단위'를 전량으로 오인해 10/06분까지 팔린 것 되돌림(10/26분 매도는 유지)"},
-    {"id": "20261030-abr-hynix-sell", "op": "sell", "dry": False, "expect": "SK하이닉스",
-     "person": "안병열", "stock": "SK하이닉스", "sell_date": "2026-10-29", "quarter": (26, 4),
-     "why": "10/29 같은 메시지의 '#SK하이닉스' 매도 누락분"},
+    # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest,
+    #           20261019-daily-test, 20261019-daily-group, 20261019-lkh-daejoo,
+    #           20261030-abr-amotech-restore, 20261030-abr-hynix-sell
+    {"id": "20261102-kdh-wedding", "op": "bonus",
+     "person": "김동환", "label": "결혼 보너스", "date": "2026-11-01", "pct": 10, "quarter": (26, 4),
+     "why": "김동환 결혼 기념 +10% (운영자 지시, 11/1자)"},
 ]
 OPS_DONE_FILE = BASE_DIR / "_ops_done.txt"
 
@@ -1300,6 +1296,35 @@ def run_startup_ops(cache):
                 msg = f"▶️ [OPS 워크플로 실행] {oid}: {op['workflow']} {op.get('inputs', {})}"
                 notify_admin(msg)
                 log(msg)
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
+            if op.get("op") == "bonus":
+                # 실현 칸에 보너스·조정 행 추가(S=100, T=100+pct). 가드: 같은 라벨·같은 날짜가
+                # 이미 있으면 쓰지 않는다. 칸이 없으면 블록 마지막 행 앞에 한 줄 끼워 넣는다.
+                ws = cache.tab(tuple(op["quarter"]))
+                person, label, d, pct = op["person"], op["label"], op["date"], float(op["pct"])
+                for attempt in (0, 1):
+                    vals = cache.values(ws, fresh=True)
+                    blk = next(b for b in find_person_blocks(vals) if person in b["person"])
+                    rows = [(r, (vals[r - 1] + [""] * 21)[:21] if r - 1 < len(vals) else [""] * 21)
+                            for r in range(blk["row_start"], blk["row_end"] + 1)]
+                    if any(row[15].strip() == label and d in row[16] for _, row in rows):
+                        raise RuntimeError(f"이미 기록됨: {person} {label} {d}, 쓰기 안 함")
+                    pr = next((r for r, row in rows if not row[15].strip()), None)
+                    if pr is not None:
+                        break
+                    at = blk["row_end"]
+                    sheet_retry(lambda: ws.insert_rows([[""]], row=at, inherit_from_before=True), "행 추가")
+                if pr is None:
+                    raise RuntimeError("실현 칸 확보 실패")
+                sheet_retry(lambda: ws.batch_update([
+                    {"range": f"P{pr}:U{pr}", "values": [[label, d, d, 100, 100 + pct, f"=(T{pr}-S{pr})/S{pr}"]]},
+                ], value_input_option="USER_ENTERED"), "보너스 기록")
+                cache.refresh(ws)
+                msg = f"🎁 [OPS 보너스] {oid}\n[{ws.title}] {person} {label} {d} {pct:+.0f}% (실현 P{pr})"
+                notify_admin(msg)
+                log(msg.replace("\n", " | "))
                 done.add(oid)
                 OPS_DONE_FILE.write_text("\n".join(sorted(done)))
                 continue
