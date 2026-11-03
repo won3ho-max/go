@@ -166,7 +166,7 @@ def _naver_kr_closes(code: str) -> dict:
     pageSize 최대 60 → 2페이지(약 120거래일)면 직전분기까지 커버된다."""
     if code in _kr_close_cache:
         return _kr_close_cache[code]
-    out = {}
+    out, chg = {}, {}
     try:
         for page in (1, 2):
             rows = requests.get(
@@ -180,14 +180,44 @@ def _naver_kr_closes(code: str) -> dict:
             for r in rows:
                 d = str(r.get("localTradedAt", ""))[:10]
                 try:
-                    out[datetime.date.fromisoformat(d)] = \
-                        float(str(r.get("closePrice", "")).replace(",", ""))
+                    dd = datetime.date.fromisoformat(d)
+                    out[dd] = float(str(r.get("closePrice", "")).replace(",", ""))
+                    chg[dd] = float(str(r.get("compareToPreviousClosePrice", "")).replace(",", ""))
                 except Exception:
                     pass
     except Exception as e:
         print(f"    [네이버 시세 실패] {code}: {e}")
+    # 권리락·액면분할 감지: 네이버 등락폭은 '기준가' 대비다. 평소엔 기준가 = 전일 종가지만
+    # 무상증자·분할 권리락일엔 거래소가 기준가를 낮춘다. 기준가/전일종가가 5%↑ 어긋나면
+    # (네이버 등락폭은 평소에도 1~2% 어긋나는 날이 있어 문턱을 5%로 둔다 — 10/28 엘앤씨바이오)
+    # 그날을 권리락일로 보고 그 비율을 조정계수로 남긴다.
+    # (2026-10-26 엘앤씨바이오 무상증자 권리락 — 전일 60,200, 기준가 30,150)
+    acts, days = {}, sorted(out)
+    for prev_d, d in zip(days, days[1:]):
+        if d in chg and out.get(prev_d):
+            ref = out[d] - chg[d]
+            f = ref / out[prev_d]
+            if abs(f - 1) > 0.05:
+                acts[d] = f
+                print(f"    [권리락 감지] {code} {d}: 전일 {out[prev_d]:,.0f} → 기준가 {ref:,.0f} (×{f:.4f})")
+    _kr_action_cache[code] = acts
     _kr_close_cache[code] = out
     return out
+
+
+_kr_action_cache: dict = {}
+
+def adj_factor(market: str, code: str, start: datetime.date, end: datetime.date) -> float:
+    """start 종가를 end 시점 주식 기준으로 맞추는 계수(start < 권리락일 ≤ end 인 것들의 곱).
+    무상증자 1:1이면 0.5 — 추천일 기준가에 곱해 권리락 뒤 가격과 비교할 수 있게 한다."""
+    if market != "KR":
+        return 1.0   # 해외는 yfinance가 분할을 소급 조정해 준다
+    _naver_kr_closes(code)
+    f = 1.0
+    for d, x in _kr_action_cache.get(code, {}).items():
+        if start < d <= end:
+            f *= x
+    return f
 
 
 def close_at(market: str, code: str, date: datetime.date):
@@ -596,6 +626,12 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
             # 매 실행마다 기준가=추천일 종가 검증, 현재가=실행 시점 가격
             correct_base = close_at(market, code, rec_date)
             cur_price_now = latest_close(market, code)
+            raw_base = correct_base
+            if correct_base:
+                fa = adj_factor(market, code, rec_date, today)
+                if abs(fa - 1) > 1e-9:
+                    correct_base = round(correct_base * fa, 2)
+                    print(f"    [기준가 조정] {person}/{name}: {raw_base:,} × {fa:.4f} = {correct_base:,} (권리락)")
 
             if correct_base:
                 updates.append((row_1, 12, correct_base))  # L: 추천일 종가
@@ -642,6 +678,9 @@ def process_sheet(ws: gspread.Worksheet, today: datetime.date):
                 sell_price = close_at(market, code, sell_date)
                 if sell_price is None:
                     sell_price = fetch_price(market, code)
+                # 매도일 이후에 권리락이 있었으면 기준가를 '매도일 시점'으로 되돌린다
+                if raw_base:
+                    base_f = round(raw_base * adj_factor(market, code, rec_date, sell_date), 2)
                 if sell_price is None:
                     print(f"    [오류] {person}/{name} 매도가 조회 실패")
                     continue
@@ -1336,12 +1375,14 @@ def main():
     for f in (fix_pending_sells(ss, today) or []):
         print(f"  · {f}")
 
-    # 현재 분기 처리
-    process_quarter(current, today, is_current=True)
-
-    # 미추천자 -10% 패널티 자동 부여 (주간 라운드) — 현재 분기만
+    # 미추천자 -10% 패널티 자동 부여 (주간 라운드) — 현재 분기만.
+    # 카드보다 먼저 한다. 예전엔 카드를 만든 뒤에 패널티를 써서, 패널티가 그날 카드엔
+    # 안 보이고 다음 날에야 보였다(2026-11-03 김동환·김태완·어정윤·조형오 — 단톡방 지적).
     for f in (apply_missed_recommendation_penalties(current, today) or []):
         print(f"  · [미추천패널티] {f}")
+
+    # 현재 분기 처리 (시세·자동매도·카드)
+    process_quarter(current, today, is_current=True)
 
     # 직전 분기: 활성 종목 또는 매도가 미확정 건이 남아 있는 동안 갱신·카드 발송.
     # 모두 정산되면 자동으로 빠진다.

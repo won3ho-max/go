@@ -1267,6 +1267,10 @@ STARTUP_OPS = [
     # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest,
     #           20261019-daily-test, 20261019-daily-group, 20261019-lkh-daejoo,
     #           20261030-abr-amotech-restore, 20261030-abr-hynix-sell
+    {"id": "20261103-daily-test", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "패널티 선반영·권리락 조정 확인용 테스트 카드(개인 텔레그램)"},
+    # 처리 완료: 20261102-kdh-wedding (김동환 결혼 보너스)
     {"id": "20261102-kdh-wedding", "op": "bonus",
      "person": "김동환", "label": "결혼 보너스", "date": "2026-11-01", "pct": 10, "quarter": (26, 4),
      "why": "김동환 결혼 기념 +10% (운영자 지시, 11/1자)"},
