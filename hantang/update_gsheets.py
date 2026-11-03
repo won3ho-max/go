@@ -166,7 +166,7 @@ def _naver_kr_closes(code: str) -> dict:
     pageSize 최대 60 → 2페이지(약 120거래일)면 직전분기까지 커버된다."""
     if code in _kr_close_cache:
         return _kr_close_cache[code]
-    out, chg = {}, {}
+    out = {}
     try:
         for page in (1, 2):
             rows = requests.get(
@@ -182,39 +182,53 @@ def _naver_kr_closes(code: str) -> dict:
                 try:
                     dd = datetime.date.fromisoformat(d)
                     out[dd] = float(str(r.get("closePrice", "")).replace(",", ""))
-                    chg[dd] = float(str(r.get("compareToPreviousClosePrice", "")).replace(",", ""))
                 except Exception:
                     pass
     except Exception as e:
         print(f"    [네이버 시세 실패] {code}: {e}")
-    # 권리락·액면분할 감지: 네이버 등락폭은 '기준가' 대비다. 평소엔 기준가 = 전일 종가지만
-    # 무상증자·분할 권리락일엔 거래소가 기준가를 낮춘다. 기준가/전일종가가 5%↑ 어긋나면
-    # (네이버 등락폭은 평소에도 1~2% 어긋나는 날이 있어 문턱을 5%로 둔다 — 10/28 엘앤씨바이오)
-    # 그날을 권리락일로 보고 그 비율을 조정계수로 남긴다.
-    # (2026-10-26 엘앤씨바이오 무상증자 권리락 — 전일 60,200, 기준가 30,150)
-    acts, days = {}, sorted(out)
-    for prev_d, d in zip(days, days[1:]):
-        if d in chg and out.get(prev_d):
-            ref = out[d] - chg[d]
-            f = ref / out[prev_d]
-            if abs(f - 1) > 0.05:
-                acts[d] = f
-                print(f"    [권리락 감지] {code} {d}: 전일 {out[prev_d]:,.0f} → 기준가 {ref:,.0f} (×{f:.4f})")
-    _kr_action_cache[code] = acts
     _kr_close_cache[code] = out
     return out
 
 
 _kr_action_cache: dict = {}
 
+# 수동 보정표 {코드: [(권리락일, 계수)]} — 야후에 분할 정보가 없을 때만 쓴다.
+CORP_ACTIONS = {
+    "290650": [(datetime.date(2026, 10, 26), 0.5)],   # 엘앤씨바이오 무상증자 1:1
+}
+
+
+def _kr_actions(code: str) -> dict:
+    """{권리락일: 계수}. 야후 splits(무상증자·액면분할을 '분할'로 기록)를 1차로 쓰고
+    수동 보정표로 덮는다. 네이버 등락폭으로 추정하는 방식은 버렸다 — 네이버 종가가
+    통합(NXT 포함) 가격이라 KRX 기준가와 매일 몇 %씩 어긋나 오탐이 쏟아졌다(11/3 테스트)."""
+    if code in _kr_action_cache:
+        return _kr_action_cache[code]
+    acts = {}
+    for suf in ((".KQ", ".KS") if code in KOSDAQ_CODES else (".KS", ".KQ")):
+        try:
+            sp = yf.Ticker(code + suf).splits
+            if sp is not None and len(sp):
+                for ts, ratio in sp.items():
+                    if ratio and ratio > 0:
+                        acts[ts.date()] = 1.0 / float(ratio)
+                break
+        except Exception:
+            pass
+    for d, f in CORP_ACTIONS.get(code, []):
+        acts[d] = f
+    _kr_action_cache[code] = acts
+    return acts
+
+
 def adj_factor(market: str, code: str, start: datetime.date, end: datetime.date) -> float:
     """start 종가를 end 시점 주식 기준으로 맞추는 계수(start < 권리락일 ≤ end 인 것들의 곱).
-    무상증자 1:1이면 0.5 — 추천일 기준가에 곱해 권리락 뒤 가격과 비교할 수 있게 한다."""
+    무상증자 1:1이면 0.5 — 추천일 기준가에 곱해 권리락 뒤 가격과 비교할 수 있게 한다.
+    (2026-10-26 엘앤씨바이오 무상증자 권리락 — 송지호 10/19 추천분이 -62%로 찍혔던 건)"""
     if market != "KR":
         return 1.0   # 해외는 yfinance가 분할을 소급 조정해 준다
-    _naver_kr_closes(code)
     f = 1.0
-    for d, x in _kr_action_cache.get(code, {}).items():
+    for d, x in _kr_actions(code).items():
         if start < d <= end:
             f *= x
     return f
