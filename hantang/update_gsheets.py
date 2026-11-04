@@ -166,7 +166,15 @@ def _naver_kr_closes(code: str) -> dict:
     pageSize 최대 60 → 2페이지(약 120거래일)면 직전분기까지 커버된다."""
     if code in _kr_close_cache:
         return _kr_close_cache[code]
-    out = {}
+    # 1순위: 다음(Daum) 일봉 = KRX 정규장 종가.
+    # 네이버 일봉 종가는 넥스트레이드(NXT, ~20:00) 거래까지 합친 '통합' 최종가라
+    # KRX 15:30 종가와 하루 수 % 어긋난다(삼성전자 10/19 네이버 223,500 vs KRX 218,000,
+    # 네이버 다음날 등락폭 기준가·다음·야후는 모두 218,000). 2026-11-03 확인.
+    krx = _daum_krx_closes(code)
+    if krx:
+        _kr_close_cache[code] = krx
+        return krx
+    out, chg = {}, {}
     try:
         for page in (1, 2):
             rows = requests.get(
@@ -182,11 +190,38 @@ def _naver_kr_closes(code: str) -> dict:
                 try:
                     dd = datetime.date.fromisoformat(d)
                     out[dd] = float(str(r.get("closePrice", "")).replace(",", ""))
+                    chg[dd] = float(str(r.get("compareToPreviousClosePrice", "")).replace(",", ""))
                 except Exception:
                     pass
     except Exception as e:
         print(f"    [네이버 시세 실패] {code}: {e}")
+    # 다음에 없는 종목(일부 ETF 등)은 네이버에서 KRX 종가를 역산한다:
+    # 다음날 등락폭의 기준가 = 전일 KRX 종가. 마지막 날만 통합가를 그대로 쓴다.
+    days = sorted(out)
+    for d0, d1 in zip(days, days[1:]):
+        if d1 in chg:
+            out[d0] = out[d1] - chg[d1]
     _kr_close_cache[code] = out
+    return out
+
+
+def _daum_krx_closes(code: str) -> dict:
+    """다음 금융 일봉(KRX 정규장 종가) {date: close}. 실패하면 {}."""
+    out = {}
+    try:
+        r = requests.get(f"https://finance.daum.net/api/quote/A{code}/days",
+                         params={"symbolCode": f"A{code}", "page": 1, "perPage": 100,
+                                 "pagination": "true"},
+                         headers={"User-Agent": "Mozilla/5.0",
+                                  "Referer": f"https://finance.daum.net/quotes/A{code}"},
+                         timeout=8).json()
+        for row in r.get("data") or []:
+            try:
+                out[datetime.date.fromisoformat(str(row["date"])[:10])] = float(row["tradePrice"])
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"    [다음 시세 실패] {code}: {e}")
     return out
 
 

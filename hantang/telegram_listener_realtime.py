@@ -1268,9 +1268,10 @@ STARTUP_OPS = [
     #           20261019-daily-test, 20261019-daily-group, 20261019-lkh-daejoo,
     #           20261030-abr-amotech-restore, 20261030-abr-hynix-sell
     # 처리 완료: 20261103-daily-test, 20261103-daily-test2
-    {"id": "20261103-daily-group", "op": "dispatch", "workflow": "daily_report.yml",
-     "inputs": {"test_mode": "false"},
-     "why": "패널티·엘앤씨바이오 권리락 반영한 4분기 카드 단톡방 재발송"},
+    # 처리 완료: 20261103-daily-group
+    {"id": "20261103-daily-krx-test", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "시세 소스 KRX 종가(다음)로 교체 후 확인(개인 텔레그램)"},
     # 처리 완료: 20261102-kdh-wedding (김동환 결혼 보너스)
     {"id": "20261102-kdh-wedding", "op": "bonus",
      "person": "김동환", "label": "결혼 보너스", "date": "2026-11-01", "pct": 10, "quarter": (26, 4),
