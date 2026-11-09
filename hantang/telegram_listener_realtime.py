@@ -115,12 +115,30 @@ def tg_get(method, **params):
 
 
 def tg_send(chat_id, text):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": chat_id, "text": text}, timeout=15)
-    except Exception as e:
-        log(f"[경고] tg_send 실패: {e}")
+    """텔레그램 발송. 429(retry_after)·5xx는 기다렸다 다시 보낸다.
+    예전엔 응답을 보지 않아, 텔레그램이 429/502를 주면 알림이 소리 없이 사라졌다
+    (2026-11-09 21:52 이원호 '신한 금 선물 ETN' — 시트엔 기록됐는데 기록 알림이 안 옴)."""
+    for i in range(5):
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                data={"chat_id": chat_id, "text": text}, timeout=15)
+            if r.ok:
+                return True
+            wait = 3 * (i + 1)
+            try:
+                wait = int(r.json().get("parameters", {}).get("retry_after", wait)) + 1
+            except Exception:
+                pass
+            if r.status_code not in (429, 500, 502, 503, 504):
+                log(f"[경고] tg_send 거부 {r.status_code}: {r.text[:120]}")
+                return False
+            time.sleep(min(wait, 30))
+        except Exception as e:
+            log(f"[경고] tg_send 예외: {e}")
+            time.sleep(3 * (i + 1))
+    log(f"[경고] tg_send 최종 실패 — 알림 유실: {text[:120]}")
+    return False
 
 
 def notify_admin(text: str):
@@ -1272,6 +1290,7 @@ STARTUP_OPS = [
     # 8/14~11/3 네이버 통합(NXT 포함) 종가로 기록된 실현 행을 KRX 정규장 종가(다음 일봉)로 정정.
     # 행: [연, 분기, 행, 종목, 추천일, 매도일, 기존S, 기존T, 새S, 새T]
     # 처리 완료: 20261106-krx-refix (실현 40건 KRX 종가 정정)
+    # 처리 완료: 20261109-log-gold
     {"id": "20261109-log-gold", "op": "dispatch", "workflow": "listener_log.yml",
      "inputs": {"pattern": "신한|금 선물|금선물|ETN|오류|미매핑|가동|재시도", "lines": "120", "scan": "20000"},
      "why": "11/9 '신한 금 선물 ETN' 추천 미수집 원인 조사"},
