@@ -1340,6 +1340,9 @@ STARTUP_OPS = [
     # 8/14~11/3 네이버 통합(NXT 포함) 종가로 기록된 실현 행을 KRX 정규장 종가(다음 일봉)로 정정.
     # 행: [연, 분기, 행, 종목, 추천일, 매도일, 기존S, 기존T, 새S, 새T]
     # 처리 완료: 20261106-krx-refix (실현 40건 KRX 종가 정정)
+    {"id": "20261110-log-resell", "op": "dispatch", "workflow": "listener_log.yml",
+     "inputs": {"pattern": "OPS", "lines": "15", "scan": "3000"},
+     "why": "스튜디오드래곤 정정 결과 확인"},
     {"id": "20261110-ktw-studiodragon-resell", "op": "resell",
      "person": "김태완", "stock": "스튜디오드래곤", "wrong_rec": "2026-10-19", "right_rec": "2026-10-26",
      "quarter": (26, 4),
