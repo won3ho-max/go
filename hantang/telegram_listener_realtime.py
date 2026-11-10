@@ -402,8 +402,11 @@ def _pending_add(cache, sheet_title, row, name, sell_date):
         log(f"[경고] _pending_sell 기록 실패: {e}")
 
 
-def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown=False):
-    """가장 과거(위쪽) 매칭 활성 종목을 실현 섹션으로 이동. manual_sell과 동일 규칙."""
+def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown=False,
+               rec_hint=None, p_row_hint=None):
+    """가장 과거(위쪽) 매칭 활성 종목을 실현 섹션으로 이동. manual_sell과 동일 규칙.
+    rec_hint(추천일 'YYYY-MM-DD')가 있으면 그 추천일 보유분만 판다(없으면 실패).
+    (2026-11-10 김태완 '스튜디오드래곤 (10/26일자)'를 10/19분으로 판 사고)"""
     blocks = find_person_blocks(all_values)
     block = next((b for b in blocks
                   if b["person"] == person_name or person_name in b["person"]), None)
@@ -421,6 +424,9 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown
         if not j:
             continue
         j_code, j_base = _split_stock_label(str(j))
+        k = all_values[idx][10] if len(all_values[idx]) > 10 else ""
+        if rec_hint and rec_hint not in str(k):
+            continue
         if t_code and j_code and t_code == j_code:
             stock_row = r
             break
@@ -429,6 +435,8 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown
             stock_row = r
             break
     if stock_row is None:
+        if rec_hint:
+            return False, f"'{stock_name}' 추천일 {rec_hint} 활성 종목을 찾을 수 없음"
         return False, f"'{stock_name}' 활성 종목을 찾을 수 없음"
 
     row = all_values[stock_row - 1]
@@ -438,7 +446,11 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown
     cur      = row[12] if len(row) > 12 else ""
 
     p_row = None
-    for r in range(block["row_start"], block["row_end"] + 1):
+    if p_row_hint:
+        pv = all_values[p_row_hint - 1][15] if len(all_values[p_row_hint - 1]) > 15 else ""
+        if not str(pv).strip():
+            p_row = p_row_hint
+    for r in ([] if p_row else range(block["row_start"], block["row_end"] + 1)):
         ri = r - 1
         if ri >= len(all_values):
             break
@@ -455,7 +467,8 @@ def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown
         sheet_retry(lambda: ws.insert_rows([[""]], row=at, inherit_from_before=True), "행 추가")
         log(f"[행 추가] {person_name} 블록 실현 칸 부족 → 행 {at}에 1행 추가")
         fresh = sheet_retry(ws.get_all_values, "시트 재읽기")
-        return sell_stock(ws, fresh, person_name, stock_name, sell_date, cache, _grown=True)
+        return sell_stock(ws, fresh, person_name, stock_name, sell_date, cache, _grown=True,
+                          rec_hint=rec_hint)
 
     try:
         base_f = float(str(base).replace(",", ""))
@@ -1182,15 +1195,18 @@ def handle_message(msg: dict, cache: SheetCache):
         if len(plan) >= 2:
             lines = []
             ok_any = False
-            for stk, cnt, ln in plan:
-                ok1, res1 = sell_across(cache, member, stk, today_kst(), count=cnt)
+            for stk, cnt, ln, hint in plan:
+                ok1, res1 = sell_across(cache, member, stk, today_kst(), count=cnt, rec_hint=hint)
                 ok_any = ok_any or ok1
                 lines.append(f"{'✅' if ok1 else '❌'} {stk} ({'전량' if cnt is None else f'{cnt}건'}) ← '{ln}'\n{res1}")
             notify_admin(f"{'✅' if ok_any else '❌'} 매도 자동처리(복수 종목) — {member}\n원문: {body}\n" + "\n".join(lines))
             log(f"[매도-복수] {member}: " + " || ".join(x.replace(chr(10), ' ') for x in lines) + f" | 원문: {body}")
             return
         cnt = _sell_count(text)
-        ok, result = sell_across(cache, member, stock, today_kst(), count=cnt)
+        hint = _rec_hint(_name_head(text))
+        ok, result = sell_across(cache, member, stock, today_kst(), count=cnt, rec_hint=hint)
+        if hint:
+            why += f" | 원문 날짜 → 추천일 {hint} 보유분 지정"
         if cnt is None:
             why += " | 전량 표현 감지 → 같은 종목 보유분 전부 매도"
         elif cnt > 1:
@@ -1207,6 +1223,26 @@ _KO_NUM = {"한": 1, "하나": 1, "두": 2, "둘": 2, "세": 3, "셋": 3, "네":
 _UNIT_RE = re.compile(r"(\d+|한|하나|두|둘|세|셋|네|넷)\s*(?:단위|개|건|주|번)")
 
 
+_DATE_HINT_RE = re.compile(r"(?<!\d)(1[0-2]|0?[1-9])\s*[/.월]\s*([12]\d|3[01]|0?[1-9])(?!\d)\s*(?:일)?\s*(?:자|추천|매수|분|건|일자)?")
+
+
+def _rec_hint(seg: str, today=None):
+    """'(10/26일자)', '10.26 추천분', '10월 26일자' → '2026-10-26'. 없으면 None.
+    여러 개면 첫 번째. 연도는 오늘 기준(미래 날짜면 작년)."""
+    m = _DATE_HINT_RE.search(seg or "")
+    if not m:
+        return None
+    t = today or today_kst()
+    mo, d = int(m.group(1)), int(m.group(2))
+    try:
+        dt = datetime.date(t.year, mo, d)
+        if dt > t:
+            dt = datetime.date(t.year - 1, mo, d)
+        return str(dt)
+    except ValueError:
+        return None
+
+
 def _sell_count(seg: str):
     """매도 수량. 1(기본) / N / None(전량).
     10/29 안병열 '#아모텍 1단위'를 'N단위=전량'으로 읽어 2건을 다 팔았던 사고 —
@@ -1220,6 +1256,17 @@ def _sell_count(seg: str):
     if _SELL_ALL_RE.search(seg):
         return None
     return 1
+
+
+def _name_head(text: str) -> str:
+    """사유(>, -, 1. 등) 시작 전 줄들. 날짜 지정은 여기서만 읽는다(사유 속 날짜 오인 방지)."""
+    out = []
+    for ln in (text or "").split("\n")[:8]:
+        t = ln.strip()
+        if re.match(r"^(>|-|\d+[.)]\s|ㅇ|사유)", t):
+            break
+        out.append(t)
+    return "\n".join(out)
 
 
 def _multi_sell_plan(text: str, held):
@@ -1241,11 +1288,11 @@ def _multi_sell_plan(text: str, held):
         if key in seen:
             continue
         seen.add(key)
-        plan.append((stk, _sell_count(t), t))
+        plan.append((stk, _sell_count(t), t, _rec_hint(t)))
     return plan
 
 
-def sell_across(cache, member, stock, sell_date, sell_all=False, count=1):
+def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hint=None):
     """직전 분기 → 현재 분기 순(가장 과거부터)으로 판다. sell_all이면 매칭이 없어질
     때까지 반복한다. 반환: (하나라도 성공, 결과 문자열)."""
     done, last = [], "보유 탭 없음"
@@ -1256,7 +1303,7 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1):
             if tws is None:
                 continue
             tvals = cache.values(tws, fresh=bool(done))
-            ok, res = sell_stock(tws, tvals, member, stock, sell_date, cache)
+            ok, res = sell_stock(tws, tvals, member, stock, sell_date, cache, rec_hint=rec_hint)
             if ok:
                 cache.refresh(tws)
                 done.append(f"[{tws.title}] {res}")
@@ -1269,6 +1316,9 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1):
         if not sold:
             break
     if not done:
+        if rec_hint and "추천일" in str(last):
+            ok2, res2 = sell_across(cache, member, stock, sell_date, sell_all, count, rec_hint=None)
+            return ok2, f"(원문 날짜 {rec_hint}와 맞는 추천분이 없어 기본 규칙 적용)\n{res2}"
         return False, last
     head = f"총 {len(done)}건 매도\n" if len(done) > 1 else ""
     return True, head + "\n".join(done)
@@ -1290,6 +1340,10 @@ STARTUP_OPS = [
     # 8/14~11/3 네이버 통합(NXT 포함) 종가로 기록된 실현 행을 KRX 정규장 종가(다음 일봉)로 정정.
     # 행: [연, 분기, 행, 종목, 추천일, 매도일, 기존S, 기존T, 새S, 새T]
     # 처리 완료: 20261106-krx-refix (실현 40건 KRX 종가 정정)
+    {"id": "20261110-ktw-studiodragon-resell", "op": "resell",
+     "person": "김태완", "stock": "스튜디오드래곤", "wrong_rec": "2026-10-19", "right_rec": "2026-10-26",
+     "quarter": (26, 4),
+     "why": "'스튜디오드래곤 (10/26일자)' 매도를 10/19분으로 처리한 것 정정"},
     # 처리 완료: 20261109-log-gold
     {"id": "20261109-log-gold", "op": "dispatch", "workflow": "listener_log.yml",
      "inputs": {"pattern": "신한|금 선물|금선물|ETN|오류|미매핑|가동|재시도", "lines": "120", "scan": "20000"},
@@ -1324,6 +1378,41 @@ def run_startup_ops(cache):
                 msg = f"▶️ [OPS 워크플로 실행] {oid}: {op['workflow']} {op.get('inputs', {})}"
                 notify_admin(msg)
                 log(msg)
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
+            if op.get("op") == "resell":
+                # 잘못 판 추천분(wrong_rec)을 활성으로 되돌리고, 같은 매도일·같은 실현 행에
+                # 맞는 추천분(right_rec)을 판다. 가드: 잘못 판 실현 행 정확히 1건, 맞는 추천분 활성 1건↑.
+                ws = cache.tab(tuple(op["quarter"]))
+                vals = cache.values(ws, fresh=True)
+                person = op["person"]; tb = _split_stock_label(op["stock"])[1]
+                blk = next(b for b in find_person_blocks(vals) if person in b["person"])
+                rows = [(r, (vals[r - 1] + [""] * 21)[:21]) for r in range(blk["row_start"], blk["row_end"] + 1)
+                        if r - 1 < len(vals)]
+                wrong = [(r, row) for r, row in rows
+                         if row[15] and _split_stock_label(row[15])[1] == tb and op["wrong_rec"] in row[16]]
+                right = [r for r, row in rows
+                         if row[9] and _split_stock_label(row[9])[1] == tb and op["right_rec"] in row[10]]
+                empty_j = next((r for r, row in rows if not row[9].strip()), None)
+                if len(wrong) != 1 or not right or empty_j is None:
+                    raise RuntimeError(f"가드 불통과 — 잘못 판 행 {len(wrong)}건, 맞는 보유 {len(right)}건, 빈 활성행 {empty_j}")
+                pr, row = wrong[0]
+                sd = row[17][:10]
+                sheet_retry(lambda: ws.batch_update([
+                    {"range": f"J{empty_j}:N{empty_j}", "values": [[row[15], row[16], row[18], row[19], f"=(M{empty_j}-L{empty_j})/L{empty_j}"]]},
+                    {"range": f"P{pr}:U{pr}", "values": [["", "", "", "", "", ""]]},
+                ], value_input_option="USER_ENTERED"), "매도 취소")
+                vals = cache.refresh(ws)
+                ok, res = sell_stock(ws, vals, person, op["stock"], datetime.date.fromisoformat(sd), cache,
+                                     rec_hint=op["right_rec"], p_row_hint=pr)
+                cache.refresh(ws)
+                msg = (f"{'✅' if ok else '❌'} [OPS 매도 정정] {oid}\n[{ws.title}] {person} {row[15]} "
+                       f"{op['wrong_rec']}분 매도 취소(활성 J{empty_j}) → {op['right_rec']}분 {sd} 매도\n{res}")
+                notify_admin(msg)
+                log(msg.replace("\n", " | "))
+                if not ok:
+                    raise RuntimeError(res)
                 done.add(oid)
                 OPS_DONE_FILE.write_text("\n".join(sorted(done)))
                 continue
