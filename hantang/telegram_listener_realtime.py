@@ -1784,7 +1784,7 @@ def round_reminder(cache, now):
         # 단톡방: 현재 기준 미추천자만 짧게. 인식 실패 보류자는 글을 올린 사람이라 넣지 않는다.
         group_txt = ""
         if miss:
-            group_txt = (f"📋 라운드 현황 ({today.strftime('%m/%d')} {at} 기준)\n"
+            group_txt = (f"📋 이번주 종목 추천 현황 ({today.strftime('%m/%d')} {at} 기준)\n"
                          f"미추천: {', '.join(miss)}\n"
                          f"※ 오늘 안에 #종목추천 올려주세요 (미추천 시 -10%)")
             gid = group_chat_id()
@@ -1794,7 +1794,7 @@ def round_reminder(cache, now):
                 group_txt = ("(단톡방 chat_id를 아직 몰라 못 보냄 — 멤버 메시지가 한 번 오면 자동 등록)\n"
                              + group_txt)
         # 운영자: 단톡방에 보낸 내용 + 인식 실패 보류자
-        lines = [f"📋 라운드 현황 — {today.strftime('%m/%d')} {at} [{ws.title}] 추천 완료 {len(done)}/{len(st)}"]
+        lines = [f"📋 이번주 종목 추천 현황 — {today.strftime('%m/%d')} {at} [{ws.title}] 추천 완료 {len(done)}/{len(st)}"]
         lines.append(("단톡방 발송:\n" + group_txt) if group_txt else "✅ 미추천자 없음 — 단톡방 발송 안 함")
         if held:
             lines.append(f"⚠️ 추천 글은 있는데 인식 실패(패널티 보류): {', '.join(held)} → 종목 수동 확정 필요")
