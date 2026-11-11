@@ -174,6 +174,25 @@ KRX_HOLIDAYS = {
     "2027-01-01", "2027-02-08", "2027-02-09", "2027-03-01", "2027-05-05", "2027-05-13",
     "2027-08-16", "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-04",
 }
+# 휴장 안내용 사유. 판정은 is_krx_session(위 표·달력)이 하고, 여기선 이름만 붙인다.
+# ※ 2027-10-11(한글날 10/9 토 → 대체공휴일 예상)·2027-12-27(성탄절 대체 예상)은
+#   달력·위 표에 아직 없다. KRX 공지가 나오면 KRX_HOLIDAYS와 함께 추가할 것.
+KRX_HOLIDAY_NAMES = {
+    "2026-12-25": "성탄절", "2026-12-31": "연말 휴장일",
+    "2027-01-01": "신정", "2027-02-08": "설날", "2027-02-09": "설날 대체공휴일",
+    "2027-03-01": "삼일절", "2027-05-05": "어린이날", "2027-05-13": "부처님오신날",
+    "2027-08-16": "광복절 대체공휴일", "2027-09-14": "추석 연휴", "2027-09-15": "추석",
+    "2027-09-16": "추석 연휴", "2027-10-04": "개천절 대체공휴일",
+}
+# 뉴욕증권거래소(NYSE) 평일 휴장일. 매년 갱신 필요.
+US_HOLIDAYS = {
+    "2026-11-26": "추수감사절", "2026-12-25": "크리스마스",
+    "2027-01-01": "새해 첫날", "2027-01-18": "마틴 루터 킹 데이",
+    "2027-02-15": "대통령의 날", "2027-03-26": "성금요일",
+    "2027-05-31": "메모리얼 데이", "2027-06-18": "준틴스 대체휴일",
+    "2027-07-05": "독립기념일 대체휴일", "2027-09-06": "노동절",
+    "2027-11-25": "추수감사절", "2027-12-24": "크리스마스 대체휴일",
+}
 try:
     import exchange_calendars as _xcals
     _XKRX = _xcals.get_calendar("XKRX")
@@ -1396,6 +1415,9 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
+    {"id": "20261111-daily-test-alerts", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "아침 알림(자동매도 예고·급등락) 추가 후 데일리 정상 동작 확인(개인 텔레그램)"},
     # 처리 완료: 20261006-kdh-djt, 20261012-lwh-kodex10y, 20261012-ktw-hanwhasol, 20261015-abr-icraft-rest,
     #           20261019-daily-test, 20261019-daily-group, 20261019-lkh-daejoo,
     #           20261030-abr-amotech-restore, 20261030-abr-hynix-sell
@@ -1849,11 +1871,82 @@ def daily_watch(now):
     log(f"[데일리 감시] 경보: {why}")
 
 
+HOLIDAY_NOTICE_AT = "17:00"   # 휴장 전날(주말 끼면 금요일) 단톡방 안내
+_WD = "월화수목금토일"
+
+
+def _md(d: datetime.date) -> str:
+    return f"{d.month}/{d.day}({_WD[d.weekday()]})"
+
+
+def holiday_notice_text(today: datetime.date) -> str:
+    """오늘 저녁 단톡방에 보낼 휴장 안내. 보낼 게 없으면 ''.
+    다음 평일(N)이 국내·미국 휴장이면 사유와 함께 알리고, 다음 주로 넘어가는 날이면
+    다음주 추천일(그 주 첫 국내 거래일)이 월요일이 아닐 때 함께 알린다."""
+    if today.weekday() >= 5:
+        return ""
+    n = today + datetime.timedelta(days=1)
+    while n.weekday() >= 5:
+        n += datetime.timedelta(days=1)
+    next_week = n.isocalendar()[1] != today.isocalendar()[1]
+    when = (f"다음주 {_WD[n.weekday()]}요일({n.month}/{n.day})" if next_week
+            else f"내일 {_md(n)}")
+    lines = []
+
+    # 국내: N부터 이어지는 평일 휴장 묶음(연휴)
+    if not is_krx_session(n):
+        run, d = [], n
+        while len(run) < 10:
+            if d.weekday() < 5:
+                if is_krx_session(d):
+                    break
+                run.append(d)
+            d += datetime.timedelta(days=1)
+        names = []
+        for x in run:
+            nm = KRX_HOLIDAY_NAMES.get(str(x), "휴장")
+            if nm not in names:
+                names.append(nm)
+        span = when if len(run) == 1 else f"{when}부터 {_md(run[-1])}까지"
+        lines.append(f"🇰🇷 {span} 국내 증시 휴장 — {', '.join(names)}")
+    # 미국: N 하루만(미국 연휴는 하루씩)
+    if str(n) in US_HOLIDAYS:
+        lines.append(f"🇺🇸 {when} 미국 증시 휴장 — {US_HOLIDAYS[str(n)]} (한국시간 그날 밤 장 없음)")
+    # 다음주 추천일이 월요일이 아니면
+    if next_week:
+        rd = listener_round_day(n)
+        monday = n - datetime.timedelta(days=n.weekday())
+        if rd != monday:
+            lines.append(f"📌 다음주 추천일은 {_WD[rd.weekday()]}요일({rd.month}/{rd.day})입니다")
+    if not lines:
+        return ""
+    return "📅 휴장 안내\n" + "\n".join(lines)
+
+
+def holiday_notice(now):
+    today = now.date()
+    key = f"holiday-{today}"
+    if now.strftime("%H:%M") < HOLIDAY_NOTICE_AT or _periodic_done(key):
+        return
+    _periodic_mark(key)
+    txt = holiday_notice_text(today)
+    if not txt:
+        return
+    gid = group_chat_id()
+    if gid:
+        tg_send(gid, txt)
+        notify_admin("단톡방 발송:\n" + txt)
+    else:
+        notify_admin("(단톡방 chat_id를 몰라 못 보냄)\n" + txt)
+    log(f"[휴장 안내] {today}: {txt.replace(chr(10), ' / ')}")
+
+
 def periodic_checks(cache):
     if COLLECT_MODE:
         return
     now = now_kst()
-    for fn in (lambda: round_reminder(cache, now), lambda: daily_watch(now)):
+    for fn in (lambda: round_reminder(cache, now), lambda: daily_watch(now),
+               lambda: holiday_notice(now)):
         try:
             fn()
         except Exception as e:

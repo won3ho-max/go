@@ -1425,6 +1425,174 @@ def has_unconfirmed_sells(ss, title: str) -> bool:
         return False
 
 
+# ── 단톡방 아침 알림(자동매도 예고·급등락) ─────────────────────────────────
+MOVE_ALERT_PCT = 10.0    # 전 거래일 대비 ±10% 이상만
+_WD = "월화수목금토일"
+
+
+def _group_send(text: str) -> bool:
+    """TELEGRAM_CHAT_ID(쉼표 구분)로 텍스트 발송. test_mode면 워크플로가 운영자 chat_id를 넣는다."""
+    tok = os.environ.get("TELEGRAM_TOKEN", "")
+    ids = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
+    if not tok or not ids:
+        print("  [알림] TELEGRAM_TOKEN/CHAT_ID 없음 — 발송 생략\n" + text)
+        return False
+    ok = True
+    for cid in ids:
+        for i in range(4):
+            try:
+                r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                                  data={"chat_id": cid, "text": text}, timeout=15)
+                if r.ok:
+                    break
+                if r.status_code not in (429, 500, 502, 503, 504):
+                    print(f"  [알림 거부] {r.status_code} {r.text[:120]}")
+                    ok = False
+                    break
+                time.sleep(3 * (i + 1))
+            except Exception as e:
+                print(f"  [알림 예외] {e}")
+                time.sleep(3 * (i + 1))
+        else:
+            ok = False
+    return ok
+
+
+def _active_rows(vals):
+    """[(멤버, 종목, 추천일(date), 수익률 문자열)] — 활성 섹션(J~N)."""
+    out = []
+    for b in find_person_blocks(vals):
+        for r in range(b["row_start"], b["row_end"] + 1):
+            if r - 1 >= len(vals):
+                break
+            row = list(vals[r - 1]) + [""] * 21
+            nm = str(row[9]).strip()
+            if not nm:
+                continue
+            try:
+                rd = datetime.date.fromisoformat(str(row[10]).strip()[:10])
+            except Exception:
+                continue
+            out.append((b["person"], nm, rd, str(row[13]).strip()))
+    return out
+
+
+def auto_sell_preview_text(rows, today: datetime.date) -> str:
+    """이번 주(월~일) 자동매도 예정 목록. 매주 월요일 아침 데일리가 보낸다."""
+    monday = today - datetime.timedelta(days=today.weekday())
+    sunday = monday + datetime.timedelta(days=6)
+    items = []
+    for person, nm, rd, ret in rows:
+        mk, _code = parse_stock(nm)
+        if not mk:
+            continue
+        try:
+            sd = calc_sell_date(rd, mk)
+        except Exception:
+            continue
+        if monday <= sd <= sunday and sd >= today:
+            items.append((sd, person, nm, rd, ret))
+    if not items:
+        return ""
+    items.sort()
+    lines = ["🗓 이번주 자동매도 예정 (해당일 종가로 매도)"]
+    for sd, person, nm, rd, ret in items:
+        r = f" · 현재 {ret}" if ret and "%" in ret else ""
+        lines.append(f"· {sd.month}/{sd.day}({_WD[sd.weekday()]}) {person} — {nm} "
+                     f"({rd.month}/{rd.day} 추천){r}")
+    lines.append("※ 그 전에 팔려면 #매도로 올려주세요")
+    return "\n".join(lines)
+
+
+def _only_weekends_between(a: datetime.date, b: datetime.date) -> bool:
+    """a와 b 사이(양끝 제외)가 전부 주말이면 True. 데일리는 평일마다 도니까,
+    사이에 평일이 있었다면 그날 데일리가 이미 이 세션을 알렸다."""
+    d = a + datetime.timedelta(days=1)
+    while d < b:
+        if d.weekday() < 5:
+            return False
+        d += datetime.timedelta(days=1)
+    return True
+
+
+def big_moves_text(rows, today: datetime.date) -> str:
+    """보유 종목 중 전 거래일 대비 ±MOVE_ALERT_PCT% 이상 움직인 것. 권리락은 보정한다."""
+    by_stock = {}
+    for person, nm, _rd, _ret in rows:
+        by_stock.setdefault(nm, [])
+        if person not in by_stock[nm]:
+            by_stock[nm].append(person)
+    hits = []
+    for nm, people in by_stock.items():
+        try:
+            mk, code = parse_stock(nm)
+            if not mk:
+                continue
+            target = last_completed_session(mk)
+            p1, d1 = close_on_or_before(mk, code, target, with_date=True)
+            if not p1 or not d1 or d1 != target or not _only_weekends_between(d1, today):
+                continue   # 그 세션 종가가 아직 없거나, 이미 전날 데일리가 알린 세션
+            p0, d0 = close_on_or_before(mk, code, d1 - datetime.timedelta(days=1), with_date=True)
+            if not p0 or not d0:
+                continue
+            base = p0 * adj_factor(mk, code, d0, d1)
+            pct = (p1 / base - 1) * 100
+            if abs(pct) >= MOVE_ALERT_PCT:
+                hits.append((pct, nm, mk, d1, people))
+        except Exception as e:
+            print(f"    [급등락 계산 실패] {nm}: {e}")
+    if not hits:
+        return ""
+    hits.sort(key=lambda x: -abs(x[0]))
+    lines = [f"⚡ 보유 종목 급등락 (전 거래일 대비 ±{MOVE_ALERT_PCT:g}% 이상)"]
+    for pct, nm, mk, d1, people in hits:
+        icon = "🔺" if pct > 0 else "🔻"
+        mkt = "미국 " if mk == "US" else ""
+        lines.append(f"{icon} {nm} {pct:+.1f}% ({mkt}{d1.month}/{d1.day}) — {', '.join(people)}")
+    return "\n".join(lines)
+
+
+def morning_alerts(tabs, today: datetime.date):
+    """카드 발송 뒤 단톡방에 자동매도 예고(월요일)·급등락(매일)을 보낸다.
+    같은 실행의 재시도(워크플로 3회 루프)에서 두 번 나가지 않게 표식 파일을 남긴다.
+    재발송일(ops/card_only.json 날짜 = 오늘)엔 보내지 않는다."""
+    try:
+        co = json.loads((BASE_DIR / "ops" / "card_only.json").read_text(encoding="utf-8"))
+        if str(co.get("date")) == str(today):
+            print("  · 재발송일 — 아침 알림 생략")
+            return
+    except Exception:
+        pass
+    rows = []
+    for ws in tabs:
+        if ws is None:
+            continue
+        try:
+            rows += _active_rows(sheet_retry(ws.get_all_values, "시트 읽기"))
+        except Exception as e:
+            print(f"  [아침 알림] {ws.title} 읽기 실패: {e}")
+    jobs = []
+    if today.weekday() == 0:
+        jobs.append(("sellpreview", lambda: auto_sell_preview_text(rows, today)))
+    jobs.append(("bigmove", lambda: big_moves_text(rows, today)))
+    for kind, make in jobs:
+        flag = BASE_DIR / f".alert_{kind}_{today}"
+        if flag.exists():
+            continue
+        try:
+            txt = make()
+        except Exception as e:
+            print(f"  [아침 알림] {kind} 실패: {e}")
+            continue
+        if txt:
+            print(f"  · [아침 알림:{kind}]\n{txt}")
+            if _group_send(txt):
+                flag.write_text("1")
+        else:
+            print(f"  · [아침 알림:{kind}] 해당 없음")
+            flag.write_text("0")
+
+
 def main():
     from telegram_listener_realtime import (ensure_quarter_tab, quarter_tabs,
                                             quarter_key, prev_quarter_key)
@@ -1476,6 +1644,12 @@ def main():
             process_quarter(prev, today, is_current=False)
         else:
             print(f"  직전 분기 {prev.title}: 전부 정산됨 — 카드 생략")
+
+    # 단톡방 아침 알림 — 카드 뒤에. 직전 분기 보유분도 자동매도·급등락 대상이다.
+    try:
+        morning_alerts([current, prev if (prev is not None and prev.title != current.title) else None], today)
+    except Exception as e:
+        print(f"  [아침 알림 오류] {e}")
 
 
 if __name__ == "__main__":
