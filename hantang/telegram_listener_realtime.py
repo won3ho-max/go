@@ -402,6 +402,32 @@ def _pending_add(cache, sheet_title, row, name, sell_date):
         log(f"[경고] _pending_sell 기록 실패: {e}")
 
 
+UNRESOLVED_TAB = "_unresolved_buy"
+UNRESOLVED_HEADER = ["rec_date", "member", "reason", "text", "logged_at", "status"]
+
+
+def unresolved_add(cache, rec_day, member, reason, body):
+    """기록에 실패한 매수 메시지를 남긴다. 데일리는 여기 남은 (멤버, 추천일)에
+    미추천 패널티를 매기지 않고 보류한다 — 봇의 인식 실패가 멤버 감점이 되지 않게.
+    (§10-7: 미인식 → 자동기록 안 함 → 다음 날 아침 -10% 가 그대로 붙던 구조)
+    보류 해제: 수동으로 종목을 기록하면 자연히 '추천함'이 되고, 정말 미추천이면
+    운영자가 이 탭 status 칸에 '패널티'를 적으면 다음 데일리가 패널티를 매긴다."""
+    try:
+        ss = cache.get_ss()
+        try:
+            wu = ss.worksheet(UNRESOLVED_TAB)
+        except gspread.WorksheetNotFound:
+            wu = ss.add_worksheet(title=UNRESOLVED_TAB, rows=200, cols=len(UNRESOLVED_HEADER))
+            wu.append_row(UNRESOLVED_HEADER)
+        now = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+        sheet_retry(lambda: wu.append_row([str(rec_day), member, reason[:80], body[:200], now, ""]),
+                    "미인식 기록")
+        return True
+    except Exception as e:
+        log(f"[경고] {UNRESOLVED_TAB} 기록 실패: {e}")
+        return False
+
+
 def sell_stock(ws, all_values, person_name, stock_name, sell_date, cache, _grown=False,
                rec_hint=None, p_row_hint=None):
     """가장 과거(위쪽) 매칭 활성 종목을 실현 섹션으로 이동. manual_sell과 동일 규칙.
@@ -1123,8 +1149,10 @@ def handle_message(msg: dict, cache: SheetCache):
         rec_day = next_krx_session(today_kst())
         ws, values = cache.ensure(rec_day)
         if ws is None:
+            held = unresolved_add(cache, rec_day, member, "분기 탭 없음", body)
             notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
-                         f"※ {rec_day} 분기 탭을 찾지도 만들지도 못함 → 자동기록 안 함")
+                         f"※ {rec_day} 분기 탭을 찾지도 만들지도 못함 → 자동기록 안 함"
+                         + (f"\n※ {rec_day} 미추천 패널티 보류 등록" if held else ""))
             log(f"[매수-탭없음] {member} {rec_day} | 원문: {body}")
             return
         pws, pvals = cache.prev(rec_day)
@@ -1133,9 +1161,12 @@ def handle_message(msg: dict, cache: SheetCache):
             hist += [h for h in past_labels(pvals, member) if h not in hist]
         stock, why = resolve_stock(text, history=hist)
         if not stock:
+            held = unresolved_add(cache, rec_day, member, "종목 미인식", body)
             notify_admin(f"🟢 매수 감지 — {member}\n원문: {body}\n"
                          f"※ 종목명 자동인식 실패 → 자동기록 안 함(수동 확정 필요)\n"
-                         f"사유: {why}")
+                         f"사유: {why}"
+                         + (f"\n※ {rec_day} 미추천 패널티 보류 등록 — 종목을 수동 기록하면 해제, "
+                            f"정말 미추천이면 {UNRESOLVED_TAB} status에 '패널티'" if held else ""))
             log(f"[매수-미인식] {member}: {why}")
             return
         dup = find_active_dup(values, member, stock)
@@ -1157,6 +1188,8 @@ def handle_message(msg: dict, cache: SheetCache):
             log(f"[매수-중복보류] {member}/{stock}: {dup} | 근거: {why} | 원문: {body}")
             return
         ok, result = add_stock(ws, values, member, stock, rec_day)
+        if not ok and unresolved_add(cache, rec_day, member, f"기록 실패: {stock}", body):
+            result += f"\n※ {rec_day} 미추천 패널티 보류 등록"
         if ok:
             cache.refresh(ws)
             result = f"[{ws.title}] {result}"
@@ -1602,6 +1635,194 @@ def run_startup_ops(cache):
             log(f"[OPS 실패] {oid}: {e}")
 
 
+# ── 주기 점검(총무 알림) ──────────────────────────────────────────────────
+# 메인 루프가 long-poll 한 번(≤50초)마다 부른다. 각 항목은 하루 한 번만 보내고,
+# 보낸 키는 VM 로컬 파일에 남겨 재기동해도 반복하지 않는다. 받는 사람은 운영자뿐(본채널 아님).
+PERIODIC_FILE = BASE_DIR / "_periodic_done.txt"
+ROUND_REMIND_AT = ("14:00", "21:00")   # 라운드일 미추천자 현황(21시는 빠진 사람이 있을 때만)
+DAILY_WATCH_AT = "08:00"               # 07:00 데일리가 돌았는지 확인
+DAILY_WATCH_GIVEUP = "10:00"           # 이때까지 진행 중이면 그대로 알린다
+_periodic_cache = {"keys": None}
+
+
+def _periodic_done(key):
+    if _periodic_cache["keys"] is None:
+        try:
+            _periodic_cache["keys"] = set(PERIODIC_FILE.read_text().split())
+        except Exception:
+            _periodic_cache["keys"] = set()
+    return key in _periodic_cache["keys"]
+
+
+def _periodic_mark(key):
+    keys = _periodic_cache["keys"] or set()
+    keys.add(key)
+    # 2주 넘은 키는 버린다(키에 날짜가 들어 있다)
+    cut = str(today_kst() - datetime.timedelta(days=14))
+    def _fresh(k):
+        m = re.search(r"\d{4}-\d{2}-\d{2}", k)
+        return not m or m.group(0) >= cut
+    _periodic_cache["keys"] = {k for k in keys if _fresh(k)}
+    try:
+        PERIODIC_FILE.write_text("\n".join(sorted(_periodic_cache["keys"])))
+    except Exception as e:
+        log(f"[경고] 주기 점검 기록 실패: {e}")
+
+
+def now_kst():
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+
+
+def listener_round_day(d: datetime.date) -> datetime.date:
+    """그 주(월~일) 첫 KRX 거래일 — update_gsheets.round_day와 같은 정의."""
+    monday = d - datetime.timedelta(days=d.weekday())
+    for i in range(7):
+        x = monday + datetime.timedelta(days=i)
+        if is_krx_session(x):
+            return x
+    return monday
+
+
+def _is_adjust_label(s: str) -> bool:
+    return any(w in str(s) for w in _ADJUST_WORDS)
+
+
+def unresolved_rows(cache):
+    """_unresolved_buy 탭의 [(rec_date, member, reason, status)] (없으면 [])."""
+    try:
+        wu = cache.get_ss().worksheet(UNRESOLVED_TAB)
+        rows = sheet_retry(wu.get_all_values, "미인식 탭 읽기")
+    except Exception:
+        return []
+    out = []
+    for r in rows[1:]:
+        r = (r + [""] * 6)[:6]
+        if r[0] and r[1]:
+            out.append((r[0].strip()[:10], r[1].strip(), r[2].strip(), r[5].strip()))
+    return out
+
+
+def round_status(values, day: datetime.date):
+    """그날 추천 여부: {멤버: [종목,...]}(추천 안 한 멤버는 빈 목록)."""
+    ds = str(day)
+    out = {}
+    for b in find_person_blocks(values):
+        person = b["person"]
+        if not person:
+            continue
+        got = out.setdefault(person, [])
+        for r in range(b["row_start"], b["row_end"] + 1):
+            if r - 1 >= len(values):
+                break
+            row = (values[r - 1] + [""] * 21)[:21]
+            if row[9].strip() and ds in row[10]:
+                got.append(row[9].strip())
+            if row[15].strip() and ds in row[16] and not _is_adjust_label(row[15]):
+                got.append(row[15].strip())
+    return out
+
+
+def round_reminder(cache, now):
+    """라운드일 14시·21시: 미추천자·인식 실패 보류자 현황을 운영자에게 보낸다.
+    총무가 마감 전에 단톡방에서 독촉할 수 있게. (패널티는 다음 날 아침 데일리가 매긴다)"""
+    today = now.date()
+    if not is_krx_session(today) or listener_round_day(today) != today:
+        return
+    hm = now.strftime("%H:%M")
+    for i, at in enumerate(ROUND_REMIND_AT):
+        key = f"round-{today}-{at}"
+        if hm < at or _periodic_done(key):
+            continue
+        # 늦게 기동해 두 시각을 다 넘겼으면 마지막 것만 보낸다
+        if i + 1 < len(ROUND_REMIND_AT) and hm >= ROUND_REMIND_AT[i + 1]:
+            _periodic_mark(key)
+            continue
+        ws, values = cache.ensure(today)
+        if ws is None:
+            return
+        st = round_status(cache.refresh(ws), today)
+        # 인식 실패 건이라도 그 뒤 수동 기록됐으면(추천 완료) 보류 목록에서 뺀다
+        held = sorted({m for d, m, _r, s in unresolved_rows(cache)
+                       if d == str(today) and s not in ("패널티", "해제") and not st.get(m)})
+        done = [f"{m}({', '.join(v)})" for m, v in st.items() if v]
+        miss = [m for m, v in st.items() if not v and m not in held]
+        _periodic_mark(key)
+        if at != ROUND_REMIND_AT[0] and not miss and not held:
+            log(f"[라운드 현황] {today} {at} 전원 추천 — 알림 생략")
+            continue
+        lines = [f"📋 라운드 현황 — {today.strftime('%m/%d')} {at} 기준 [{ws.title}]",
+                 f"추천 완료 {len(done)}/{len(st)}"]
+        if miss:
+            lines.append(f"⏳ 아직 미추천: {', '.join(miss)}")
+        if held:
+            lines.append(f"⚠️ 추천 글은 있는데 인식 실패(패널티 보류): {', '.join(held)} → 종목 수동 확정 필요")
+        if not miss and not held:
+            lines.append("✅ 전원 추천 완료")
+        else:
+            lines.append("※ 오늘 안에 안 올리면 내일 아침 데일리가 -10% 패널티를 매깁니다")
+        lines.append("· " + "\n· ".join(done) if done else "")
+        notify_admin("\n".join(x for x in lines if x))
+        log(f"[라운드 현황] {today} {at} 미추천={miss} 보류={held}")
+
+
+def daily_watch(now):
+    """08시: 오늘 07시 데일리(daily_report)가 성공했는지 GitHub에서 확인하고,
+    없거나 실패했으면 운영자에게 알린다. 예전엔 크론·dispatch가 실패해도
+    단톡방에 카드가 안 올라온 걸 보고서야 알았다(§12-7)."""
+    today = now.date()
+    key = f"dailywatch-{today}"
+    if today.weekday() >= 5 or now.strftime("%H:%M") < DAILY_WATCH_AT or _periodic_done(key):
+        return
+    try:
+        pat = Path("/home/won3ho/.hantang_dispatch_pat").read_text().strip()
+    except Exception:
+        pat = ""
+    since = (datetime.datetime.combine(today, datetime.time()) - datetime.timedelta(hours=9))
+    try:
+        r = requests.get(
+            "https://api.github.com/repos/won3ho-max/go/actions/workflows/daily_report.yml/runs",
+            headers={"Accept": "application/vnd.github+json",
+                     **({"Authorization": f"token {pat}"} if pat else {})},
+            params={"created": f">={since.strftime('%Y-%m-%dT%H:%M:%SZ')}", "per_page": 20},
+            timeout=20)
+        runs = r.json().get("workflow_runs", []) if r.ok else None
+    except Exception as e:
+        runs, r = None, None
+        log(f"[데일리 감시] 조회 오류: {e}")
+    if runs is None:
+        return   # 조회 실패 — 다음 루프에 다시 본다
+    ok = [x for x in runs if x.get("conclusion") == "success"]
+    running = [x for x in runs if x.get("status") != "completed"]
+    if ok:
+        _periodic_mark(key)
+        log(f"[데일리 감시] {today} 성공 run {len(ok)}건 확인")
+        return
+    if running and now.strftime("%H:%M") < DAILY_WATCH_GIVEUP:
+        return   # 아직 도는 중 — 조금 뒤 다시
+    _periodic_mark(key)
+    if not runs:
+        why = "오늘 실행된 run이 없습니다(VM 크론 또는 dispatch 실패 의심)"
+    elif running:
+        why = f"{DAILY_WATCH_GIVEUP}까지 끝나지 않았습니다"
+    else:
+        why = "오늘 run이 모두 실패했습니다: " + ", ".join(
+            f"{x.get('conclusion')}" for x in runs[:5])
+    notify_admin(f"🚨 데일리 감시 — {today} 07시 카드뉴스 확인 필요\n{why}\n"
+                 f"→ 작업 세션에서 STARTUP_OPS dispatch(daily_report)로 재실행")
+    log(f"[데일리 감시] 경보: {why}")
+
+
+def periodic_checks(cache):
+    if COLLECT_MODE:
+        return
+    now = now_kst()
+    for fn in (lambda: round_reminder(cache, now), lambda: daily_watch(now)):
+        try:
+            fn()
+        except Exception as e:
+            log(f"[주기 점검 오류] {e}")
+
+
 # ── offset 영속화 (로컬 파일) ─────────────────────────────────────────────
 def load_offset() -> int:
     try:
@@ -1706,10 +1927,17 @@ def main():
                     body = (msg.get("text", "") or msg.get("caption", "") or
                             "").strip().replace("\n", " ")[:200]
                     log(f"[오류] handle_message: {e} | {who} | {body}")
+                    held = ""
+                    raw = msg.get("text", "") or msg.get("caption", "") or ""
+                    if detect_tag(raw) == "buy" and MEMBER_MAP.get(frm.get("id")):
+                        rd = next_krx_session(today_kst())
+                        if unresolved_add(cache, rd, MEMBER_MAP[frm.get("id")], "처리 오류", body):
+                            held = f"\n※ {rd} 미추천 패널티 보류 등록"
                     notify_admin(f"⚠️ 메시지 처리 오류 — {who}\n원문: {body}\n"
-                                 f"오류: {e}\n※ 이 건은 기록되지 않았습니다. 수동 확인 필요")
+                                 f"오류: {e}\n※ 이 건은 기록되지 않았습니다. 수동 확인 필요" + held)
             if updates:
                 save_offset(offset)
+            periodic_checks(cache)
         except requests.exceptions.RequestException as e:
             log(f"[네트워크] {e}")
             time.sleep(min(backoff, 30)); backoff = min(backoff * 2, 30)

@@ -1240,6 +1240,25 @@ def fix_pending_sells(ss, today: datetime.date):
     return fixed
 
 
+_HELD_NOTES: list = []
+
+
+def unresolved_holds(ws: gspread.Worksheet) -> set:
+    """_unresolved_buy 탭의 보류 대상 {(멤버, 'YYYY-MM-DD')}. status가 '패널티'·'해제'면 제외.
+    탭이 없거나 못 읽으면 빈 집합(= 예전과 똑같이 판정)."""
+    try:
+        wu = sheet_retry(lambda: ws.spreadsheet.worksheet("_unresolved_buy"), "_unresolved_buy 열기")
+        rows = sheet_retry(wu.get_all_values, "시트 읽기")
+    except Exception:
+        return set()
+    out = set()
+    for r in rows[1:]:
+        r = (list(r) + [""] * 6)[:6]
+        if r[0].strip() and r[1].strip() and r[5].strip() not in ("패널티", "해제"):
+            out.add((r[1].strip(), r[0].strip()[:10]))
+    return out
+
+
 def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime.date, _retry=False):
     """주간 라운드 미추천자에게 -10% 패널티 자동 부여.
     규칙: 시트에 존재하는 추천일을 주 단위로 묶어 '그 주 첫 거래일'을 라운드로 보고,
@@ -1272,6 +1291,11 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                 except Exception:
                     pass
 
+    # 리스너가 '추천 글은 왔는데 기록 못 함'으로 남긴 (멤버, 추천일)은 패널티를 보류한다.
+    # 봇의 인식 실패가 멤버 감점으로 바뀌던 구조(§10-7). 운영자가 status에 '패널티'를
+    # 적으면 보류를 풀고 정상 판정한다. 종목을 수동 기록하면 그 자체로 '추천함'이 된다.
+    held_keys = unresolved_holds(ws)
+
     applied, short = [], {}
     for D in sorted(round_days):
         Ds = str(D)
@@ -1301,6 +1325,11 @@ def apply_missed_recommendation_penalties(ws: gspread.Worksheet, today: datetime
                 if (not pp or not str(pp).strip()) and empty_p is None:
                     empty_p = r
             if recommended or has_penalty:
+                continue
+            if (person, Ds) in held_keys:
+                note = f"{person} {Ds} 패널티 보류 — 추천 글 인식 실패(_unresolved_buy), 종목 수동 확정 필요"
+                if note not in _HELD_NOTES:
+                    _HELD_NOTES.append(note)
                 continue
             if empty_p is None:
                 short[person] = short.get(person, 0) + 1
@@ -1429,6 +1458,12 @@ def main():
     # 안 보이고 다음 날에야 보였다(2026-11-03 김동환·김태완·어정윤·조형오 — 단톡방 지적).
     for f in (apply_missed_recommendation_penalties(current, today) or []):
         print(f"  · [미추천패널티] {f}")
+    if _HELD_NOTES:
+        for n in _HELD_NOTES:
+            print(f"  · [패널티보류] {n}")
+        # 보류가 풀릴 때까지 매일 아침 운영자에게 알린다(조용히 묻히지 않게)
+        _send_admin("⏸ 미추천 패널티 보류 중\n" + "\n".join(_HELD_NOTES) +
+                    "\n→ 종목을 수동 기록하거나, 정말 미추천이면 _unresolved_buy status에 '패널티'")
 
     # 현재 분기 처리 (시세·자동매도·카드)
     process_quarter(current, today, is_current=True)
