@@ -1115,6 +1115,36 @@ class SheetCache:
         return ws, self.values(ws)
 
 
+GROUP_ID_FILE = BASE_DIR / "_group_chat_id.txt"
+
+
+def group_chat_id() -> str:
+    """라운드 현황을 보낼 단톡방. GROUP_CHAT_ID 환경변수가 있으면 그것, 없으면
+    멤버가 그룹에서 보낸 메시지로 학습해 둔 값(VM에 본채널 시크릿이 없어서)."""
+    if GROUP_CHAT_ID:
+        return GROUP_CHAT_ID
+    try:
+        return GROUP_ID_FILE.read_text().strip()
+    except Exception:
+        return ""
+
+
+def _remember_group(msg: dict):
+    chat = msg.get("chat") or {}
+    if chat.get("type") not in ("group", "supergroup"):
+        return
+    if MEMBER_MAP.get((msg.get("from") or {}).get("id")) is None:
+        return
+    cid = str(chat.get("id"))
+    if cid and cid != group_chat_id():
+        try:
+            GROUP_ID_FILE.write_text(cid)
+            log(f"[단톡방 등록] chat_id={cid} ({chat.get('title', '')})")
+            notify_admin(f"📌 단톡방 등록: {chat.get('title', '')} — 라운드 현황을 여기로 보냅니다")
+        except Exception as e:
+            log(f"[경고] 단톡방 chat_id 저장 실패: {e}")
+
+
 def handle_message(msg: dict, cache: SheetCache):
     text = msg.get("text", "") or msg.get("caption", "") or ""
     chat = msg.get("chat", {})
@@ -1124,6 +1154,7 @@ def handle_message(msg: dict, cache: SheetCache):
     # 그룹 필터 (지정된 경우)
     if GROUP_CHAT_ID and str(chat_id) != GROUP_CHAT_ID:
         return
+    _remember_group(msg)
 
     # 수집 모드: 감지/기록 없이 보낸이 정보만 모은다
     if COLLECT_MODE:
@@ -1639,7 +1670,7 @@ def run_startup_ops(cache):
 # 메인 루프가 long-poll 한 번(≤50초)마다 부른다. 각 항목은 하루 한 번만 보내고,
 # 보낸 키는 VM 로컬 파일에 남겨 재기동해도 반복하지 않는다. 받는 사람은 운영자뿐(본채널 아님).
 PERIODIC_FILE = BASE_DIR / "_periodic_done.txt"
-ROUND_REMIND_AT = ("14:00", "21:00")   # 라운드일 미추천자 현황(21시는 빠진 사람이 있을 때만)
+ROUND_REMIND_AT = ("14:00", "21:00")   # 라운드일 미추천자 현황 → 단톡방(빠진 사람이 있을 때만)
 DAILY_WATCH_AT = "08:00"               # 07:00 데일리가 돌았는지 확인
 DAILY_WATCH_GIVEUP = "10:00"           # 이때까지 진행 중이면 그대로 알린다
 _periodic_cache = {"keys": None}
@@ -1750,18 +1781,24 @@ def round_reminder(cache, now):
         if at != ROUND_REMIND_AT[0] and not miss and not held:
             log(f"[라운드 현황] {today} {at} 전원 추천 — 알림 생략")
             continue
-        lines = [f"📋 라운드 현황 — {today.strftime('%m/%d')} {at} 기준 [{ws.title}]",
-                 f"추천 완료 {len(done)}/{len(st)}"]
+        # 단톡방: 현재 기준 미추천자만 짧게. 인식 실패 보류자는 글을 올린 사람이라 넣지 않는다.
+        group_txt = ""
         if miss:
-            lines.append(f"⏳ 아직 미추천: {', '.join(miss)}")
+            group_txt = (f"📋 라운드 현황 ({today.strftime('%m/%d')} {at} 기준)\n"
+                         f"미추천: {', '.join(miss)}\n"
+                         f"※ 오늘 안에 #종목추천 올려주세요 (미추천 시 -10%)")
+            gid = group_chat_id()
+            if gid:
+                tg_send(gid, group_txt)
+            else:
+                group_txt = ("(단톡방 chat_id를 아직 몰라 못 보냄 — 멤버 메시지가 한 번 오면 자동 등록)\n"
+                             + group_txt)
+        # 운영자: 단톡방에 보낸 내용 + 인식 실패 보류자
+        lines = [f"📋 라운드 현황 — {today.strftime('%m/%d')} {at} [{ws.title}] 추천 완료 {len(done)}/{len(st)}"]
+        lines.append(("단톡방 발송:\n" + group_txt) if group_txt else "✅ 미추천자 없음 — 단톡방 발송 안 함")
         if held:
             lines.append(f"⚠️ 추천 글은 있는데 인식 실패(패널티 보류): {', '.join(held)} → 종목 수동 확정 필요")
-        if not miss and not held:
-            lines.append("✅ 전원 추천 완료")
-        else:
-            lines.append("※ 오늘 안에 안 올리면 내일 아침 데일리가 -10% 패널티를 매깁니다")
-        lines.append("· " + "\n· ".join(done) if done else "")
-        notify_admin("\n".join(x for x in lines if x))
+        notify_admin("\n".join(lines))
         log(f"[라운드 현황] {today} {at} 미추천={miss} 보류={held}")
 
 
