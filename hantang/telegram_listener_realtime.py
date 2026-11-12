@@ -1148,7 +1148,8 @@ class SheetCache:
 # 단톡방에서 누구든 '서울 중구 날씨'처럼 치면 그 지역의 지금 날씨를 답장한다.
 # 지명 → 좌표: OpenStreetMap Nominatim(무료, 초당 1회 제한 → 결과 캐시)
 # 날씨·미세먼지: Open-Meteo(무료, 카드뉴스 날씨와 같은 소스)
-_WEATHER_RE = re.compile(r"^\s*([가-힣A-Za-z0-9·/.\s]{1,30}?)\s*날씨\s*[?？!.]*\s*$")
+# '날씨' 뒤에 짧은 말이 붙어도 받는다('청라 날씨 알려줘', '샌프란시스코 날씨 이자식아' — 11-12 무응답)
+_WEATHER_RE = re.compile(r"^\s*([가-힣A-Za-z0-9·/.\s]{1,30}?)\s*날씨(?:는|가|좀)?\s*([가-힣\s?？!.~ㅋㅎㅠ]{0,12})$")
 # 장소 없이 이것만 있으면 잡담('오늘 날씨', '요즘 날씨 미쳤네')으로 보고 반응하지 않는다
 _WEATHER_SKIP = {"오늘", "내일", "모레", "글피", "어제", "요즘", "지금", "이번주", "주말", "오늘의",
                  "현재", "이런", "무슨", "좋은", "날씨", "추운", "더운", "미친", "실화", "와", "다음주"}
@@ -1169,7 +1170,8 @@ _weather_last = {"t": 0.0}
 FORECAST_DAYS = 16   # Open-Meteo 예보 한도
 PAST_DAYS = 30       # 지난 날짜도 이 범위면 실측으로 답한다
 
-_KO_DAY = {"오늘": 0, "내일": 1, "낼": 1, "모레": 2, "글피": 3, "어제": -1, "그제": -2, "그저께": -2}
+_KO_DAY = {"오늘": 0, "내일": 1, "낼": 1, "모레": 2, "내일모레": 2, "낼모레": 2, "글피": 3,
+           "어제": -1, "그제": -2, "그저께": -2}
 _WD_IDX = {c: i for i, c in enumerate("월화수목금토일")}
 
 
@@ -1211,8 +1213,19 @@ def _parse_weather_dates(s: str, today: datetime.date):
          lambda m: [monday + datetime.timedelta(days=7 + k) for k in range(7)])
     take(r"이번\s*주",
          lambda m: [today + datetime.timedelta(days=k) for k in range(7 - today.weekday())])
-    take(r"(?<![가-힣])(오늘|내일|낼|모레|글피|어제|그저께|그제)(?![가-힣])",
-         lambda m: [today + datetime.timedelta(days=_KO_DAY[m.group(1)])])
+    # '13일'처럼 일만 쓰면 이번 달(이미 지났으면 다음 달)
+    def dom(m):
+        d = int(m.group(1))
+        y, mo = today.year, today.month
+        if d < today.day:
+            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+        try:
+            return [datetime.date(y, mo, d)]
+        except ValueError:
+            return []
+    take(r"(?<![\d/.])([12]\d|3[01]|0?[1-9])\s*일(?![가-힣])", dom)
+    take(r"(?<![가-힣])(내일\s*모레|낼\s*모레|오늘|내일|낼|모레|글피|어제|그저께|그제)(?![가-힣])",
+         lambda m: [today + datetime.timedelta(days=_KO_DAY[re.sub(r"\s", "", m.group(1))])])
     if days is not None and days == [today]:
         days = None   # '오늘 ○○ 날씨'는 지금 날씨로
     return re.sub(r"\s+", " ", s).strip(" ·"), days
@@ -1229,7 +1242,8 @@ def weather_query(text: str, today=None):
     q, days = _parse_weather_dates(re.sub(r"\s+", " ", m.group(1)).strip(" ·"), today or today_kst())
     if not q or q in _WEATHER_SKIP or q.split(" ")[0] in _WEATHER_SKIP:
         return None
-    return q, days
+    loose = bool((m.group(2) or "").strip(" ?？!.~"))   # '날씨' 뒤에 말이 더 붙음(잡담일 수도)
+    return q, days, loose
 
 
 def _nominatim(q, kr=True):
@@ -1469,7 +1483,9 @@ def handle_weather(msg: dict) -> bool:
     parsed = weather_query(msg.get("text", "") or "")
     if not parsed:
         return False
-    q, days = parsed
+    q, days, loose = parsed
+    if loose and geocode(q) is None:
+        return True   # '삼성전자 날씨 좋네' 같은 잡담 — 지명이 아니면 조용히 넘어간다
     if time.time() - _weather_last["t"] < 3:   # 연속 요청 과부하 방지
         return True
     _weather_last["t"] = time.time()
