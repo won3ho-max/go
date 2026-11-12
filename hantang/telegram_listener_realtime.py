@@ -193,6 +193,16 @@ US_HOLIDAYS = {
     "2027-07-05": "독립기념일 대체휴일", "2027-09-06": "노동절",
     "2027-11-25": "추수감사절", "2027-12-24": "크리스마스 대체휴일",
 }
+# 휴장은 아니지만 알아둘 장 일정(개장 지연·조기 폐장 등). 휴장 안내와 같은 시각에 함께 나간다.
+# [(국기, 문구)] — 매년 갱신. 수능일은 교육부 발표 후 추가.
+MARKET_EVENTS = {
+    "2026-11-19": [("🇰🇷", "수능 — 국내 증시 1시간 늦게 개장 (10:00 개장 · 16:30 마감)")],
+    "2026-11-27": [("🇺🇸", "추수감사절 다음날 — 미국 증시 조기 폐장 (현지 13시 = 한국시간 11/28 새벽 3시)")],
+    "2026-12-24": [("🇺🇸", "크리스마스 이브 — 미국 증시 조기 폐장 (현지 13시 = 한국시간 12/25 새벽 3시)")],
+    "2026-12-30": [("🇰🇷", "올해 마지막 거래일(폐장일)")],
+    "2027-01-04": [("🇰🇷", "새해 첫 거래일 — 국내 증시 1시간 늦게 개장 (10:00 개장)")],
+    "2027-11-26": [("🇺🇸", "추수감사절 다음날 — 미국 증시 조기 폐장 (현지 13시 = 한국시간 11/27 새벽 3시)")],
+}
 try:
     import exchange_calendars as _xcals
     _XKRX = _xcals.get_calendar("XKRX")
@@ -1134,6 +1144,149 @@ class SheetCache:
         return ws, self.values(ws)
 
 
+# ── '지역 날씨' 답장 ──────────────────────────────────────────────────────
+# 단톡방에서 누구든 '서울 중구 날씨'처럼 치면 그 지역의 지금 날씨를 답장한다.
+# 지명 → 좌표: OpenStreetMap Nominatim(무료, 초당 1회 제한 → 결과 캐시)
+# 날씨·미세먼지: Open-Meteo(무료, 카드뉴스 날씨와 같은 소스)
+_WEATHER_RE = re.compile(r"^\s*([가-힣A-Za-z0-9·\s]{1,20}?)\s*날씨\s*[?？!.]*\s*$")
+# '오늘 날씨', '요즘 날씨' 같은 잡담엔 반응하지 않는다
+_WEATHER_SKIP = {"오늘", "내일", "모레", "어제", "요즘", "지금", "이번주", "주말", "오늘의",
+                 "현재", "이런", "무슨", "좋은", "날씨", "추운", "더운", "미친", "실화", "와"}
+WEATHER_DESC = {
+    0: "맑음", 1: "대체로 맑음", 2: "구름 조금", 3: "흐림", 45: "안개", 48: "안개",
+    51: "이슬비", 53: "이슬비", 55: "이슬비", 56: "어는 이슬비", 57: "어는 이슬비",
+    61: "비", 63: "비", 65: "강한 비", 66: "어는 비", 67: "어는 비",
+    71: "눈", 73: "눈", 75: "강한 눈", 77: "싸락눈",
+    80: "소나기", 81: "소나기", 82: "강한 소나기", 85: "눈 소나기", 86: "눈 소나기",
+    95: "뇌우", 96: "우박 동반 뇌우", 99: "우박 동반 뇌우",
+}
+WEATHER_ICON = {0: "☀️", 1: "🌤", 2: "⛅", 3: "☁️", 45: "🌫", 48: "🌫"}
+_GEO_OK = {"city", "town", "village", "hamlet", "borough", "suburb", "quarter", "neighbourhood",
+           "city_district", "district", "county", "state", "province", "municipality", "region",
+           "country", "island", "islet", "railway", "administrative"}
+_geo_cache = {}
+_weather_last = {"t": 0.0}
+
+
+def weather_query(text: str):
+    """'서울 중구 날씨' → '서울 중구'. 날씨 요청 형식이 아니면 None."""
+    if not text or "#" in text or "\n" in text.strip():
+        return None
+    m = _WEATHER_RE.match(text)
+    if not m:
+        return None
+    q = re.sub(r"\s+", " ", m.group(1)).strip(" ·")
+    if not q or q in _WEATHER_SKIP or q.split(" ")[0] in _WEATHER_SKIP:
+        return None
+    return q
+
+
+def geocode(q: str):
+    """(위도, 경도, 표시 이름) 또는 None. 국내 먼저, 없으면 해외."""
+    if q in _geo_cache:
+        return _geo_cache[q]
+    hit = None
+    for cc in ("kr", None):
+        params = {"q": q, "format": "json", "limit": 3, "accept-language": "ko"}
+        if cc:
+            params["countrycodes"] = cc
+        try:
+            rows = requests.get("https://nominatim.openstreetmap.org/search", params=params,
+                                headers={"User-Agent": "hantang-study-bot/1.0"}, timeout=10).json()
+        except Exception as e:
+            log(f"[날씨] 지명 검색 오류 {q}: {e}")
+            rows = []
+        time.sleep(1.1)   # Nominatim 이용 규칙: 초당 1회
+        for x in rows or []:
+            if x.get("addresstype") in _GEO_OK:
+                hit = x
+                break
+        if hit:
+            break
+    if not hit:
+        _geo_cache[q] = None
+        return None
+    parts = [p.strip() for p in hit.get("display_name", "").split(",")]
+    parts = [p for p in parts if p and not re.fullmatch(r"[\d\-]+", p) and p != "대한민국"]
+    # '중구, 서울특별시' → '서울특별시 중구' (큰 단위부터, 최대 3단계)
+    label = " ".join(list(reversed(parts))[:3]) or q
+    out = (float(hit["lat"]), float(hit["lon"]), label, "대한민국" in hit.get("display_name", ""))
+    _geo_cache[q] = out
+    return out
+
+
+def _pm_grade(v, kind):
+    if v is None:
+        return ""
+    cuts = (30, 80, 150) if kind == "pm10" else (15, 35, 75)   # 환경부 기준
+    g = "좋음" if v <= cuts[0] else "보통" if v <= cuts[1] else "나쁨" if v <= cuts[2] else "매우나쁨"
+    return f"{g}({round(v)})"
+
+
+def weather_text(q: str) -> str:
+    geo = geocode(q)
+    if not geo:
+        return f"'{q}' 지역을 찾지 못했어요. 예) 서울 중구 날씨, 판교 날씨"
+    lat, lon, label, is_kr = geo
+    w = requests.get("https://api.open-meteo.com/v1/forecast", params={
+        "latitude": lat, "longitude": lon, "timezone": "auto", "wind_speed_unit": "ms",
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
+                   "weather_code,wind_speed_10m",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+        "forecast_days": 1}, timeout=10).json()
+    cur, day = w["current"], w.get("daily", {})
+    code = cur.get("weather_code")
+    icon = WEATHER_ICON.get(code, "🌧" if code and 51 <= code <= 67 or code in (80, 81, 82) else
+                            "🌨" if code and 71 <= code <= 86 else "⛈" if code and code >= 95 else "🌡")
+    hhmm = str(cur.get("time", ""))[-5:]
+    lines = [f"{icon} {label} 지금 날씨 ({hhmm}{'' if is_kr else ' 현지'})",
+             f"{WEATHER_DESC.get(code, '')} {cur['temperature_2m']:.1f}°C (체감 {cur['apparent_temperature']:.1f}°C)"]
+    extra = []
+    try:
+        extra.append(f"최고 {day['temperature_2m_max'][0]:.0f}° / 최저 {day['temperature_2m_min'][0]:.0f}°")
+        if day.get("precipitation_probability_max") and day["precipitation_probability_max"][0] is not None:
+            extra.append(f"강수확률 {day['precipitation_probability_max'][0]}%")
+    except Exception:
+        pass
+    extra.append(f"습도 {cur['relative_humidity_2m']}%")
+    extra.append(f"바람 {cur['wind_speed_10m']:.1f}m/s")
+    lines.append(" · ".join(extra))
+    try:
+        aq = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params={
+            "latitude": lat, "longitude": lon, "current": "pm10,pm2_5", "timezone": "auto"},
+            timeout=10).json().get("current", {})
+        if aq.get("pm10") is not None:
+            lines.append(f"미세먼지 {_pm_grade(aq.get('pm10'), 'pm10')} · 초미세먼지 {_pm_grade(aq.get('pm2_5'), 'pm25')}")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def handle_weather(msg: dict) -> bool:
+    """날씨 요청이면 답장하고 True."""
+    q = weather_query(msg.get("text", "") or "")
+    if not q:
+        return False
+    if time.time() - _weather_last["t"] < 3:   # 연속 요청 과부하 방지
+        return True
+    _weather_last["t"] = time.time()
+    try:
+        txt = weather_text(q)
+    except Exception as e:
+        log(f"[날씨] 조회 실패 {q}: {e}")
+        txt = "날씨 정보를 가져오지 못했어요. 잠시 뒤 다시 시도해 주세요."
+    chat_id = (msg.get("chat") or {}).get("id")
+    try:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      data={"chat_id": chat_id, "text": txt,
+                            "reply_to_message_id": msg.get("message_id"),
+                            "allow_sending_without_reply": "true"}, timeout=15)
+    except Exception as e:
+        log(f"[날씨] 답장 실패: {e}")
+    log(f"[날씨] '{q}' → {txt.splitlines()[0]}")
+    return True
+
+
 GROUP_ID_FILE = BASE_DIR / "_group_chat_id.txt"
 
 
@@ -1182,6 +1335,7 @@ def handle_message(msg: dict, cache: SheetCache):
 
     tag = detect_tag(text)
     if tag is None:
+        handle_weather(msg)   # '서울 중구 날씨' 같은 요청이면 답장
         return  # 매수/매도 태그 없음 → 무시(알림 없음)
 
     frm = msg.get("from") or {}
@@ -1912,6 +2066,10 @@ def holiday_notice_text(today: datetime.date) -> str:
     # 미국: N 하루만(미국 연휴는 하루씩)
     if str(n) in US_HOLIDAYS:
         lines.append(f"🇺🇸 {when} 미국 증시 휴장 — {US_HOLIDAYS[str(n)]} (한국시간 그날 밤 장 없음)")
+    has_holiday = bool(lines)
+    # 휴장 아닌 장 일정(수능 개장 지연, 조기 폐장 등)
+    for flag, txt in MARKET_EVENTS.get(str(n), []):
+        lines.append(f"{flag} {when} {txt}")
     # 다음주 추천일이 월요일이 아니면
     if next_week:
         rd = listener_round_day(n)
@@ -1920,7 +2078,8 @@ def holiday_notice_text(today: datetime.date) -> str:
             lines.append(f"📌 다음주 추천일은 {_WD[rd.weekday()]}요일({rd.month}/{rd.day})입니다")
     if not lines:
         return ""
-    return "📅 휴장 안내\n" + "\n".join(lines)
+    only_holiday = has_holiday and not MARKET_EVENTS.get(str(n))
+    return ("📅 휴장 안내\n" if only_holiday else "📅 증시 일정 안내\n") + "\n".join(lines)
 
 
 def holiday_notice(now):
