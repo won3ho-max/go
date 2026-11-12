@@ -1490,6 +1490,201 @@ def handle_weather(msg: dict) -> bool:
     return True
 
 
+# ── '생년월일 운세' 답장 (사주명리 일주 기준) ──────────────────────────────
+# '1990.5.17 운세', '900517 운세', '1990년 5월 17일 운세'처럼 치면 오늘 운세를 답장한다.
+# 생시를 모르므로 사주 중 일주(日柱)만 쓴다: 태어난 날의 일간(나)과 오늘 일진의 천간 관계(십신),
+# 태어난 날 일지와 오늘 일지의 합·충으로 풀이한다. LLM 없이 규칙과 문구표로 만든다(크레딧 소진 §10-1).
+_STEMS = "갑을병정무기경신임계"
+_STEMS_H = "甲乙丙丁戊己庚辛壬癸"
+_BRANCHES = "자축인묘진사오미신유술해"
+_BRANCHES_H = "子丑寅卯辰巳午未申酉戌亥"
+_ELEM = ["목", "목", "화", "화", "토", "토", "금", "금", "수", "수"]   # 천간 → 오행
+_ELEM_H = {"목": "木", "화": "火", "토": "土", "금": "金", "수": "水"}
+_GEN = {"목": "화", "화": "토", "토": "금", "금": "수", "수": "목"}    # 생(生)
+_CTRL = {"목": "토", "토": "수", "수": "화", "화": "금", "금": "목"}   # 극(剋)
+_LUCKY_COLOR = {"목": "초록", "화": "빨강", "토": "노랑·베이지", "금": "흰색·은색", "수": "검정·남색"}
+_LUCKY_NUM = {"목": "3, 8", "화": "2, 7", "토": "5, 10", "금": "4, 9", "수": "1, 6"}   # 하도(河圖) 수
+_LUCKY_DIR = {"목": "동쪽", "화": "남쪽", "토": "중앙", "금": "서쪽", "수": "북쪽"}
+_LIUHE = {frozenset(p) for p in [(0, 1), (2, 11), (3, 10), (4, 9), (5, 8), (6, 7)]}     # 육합
+_CHONG = {frozenset((i, i + 6)) for i in range(6)}                                  # 육충
+
+# 십신별 풀이: (별점 기본, 한 줄 총평들, 재물·투자, 사람, 조언)
+_SIPSIN = {
+    "비견": (3, ["나와 같은 기운이 들어오는 날. 주관이 뚜렷해지고 추진력이 붙습니다.",
+               "어깨를 나란히 하는 기운. 혼자보다 함께할 때 힘이 납니다."],
+           "경쟁자가 많아 몫이 나뉘기 쉬운 날. 남 따라 사는 매매는 조심.",
+           "동료·친구와 의기투합하기 좋습니다. 다만 고집 대결은 피하세요.",
+           "내 페이스를 지키되 남의 말도 한 번은 들어보기."),
+    "겁재": (2, ["욕심과 승부욕이 커지는 날. 과감함이 독이 될 수 있습니다.",
+               "남과 부딪히며 기운이 새기 쉬운 날입니다."],
+           "충동 매수·몰빵 주의. 빌려주거나 보증 서는 일도 미루세요.",
+           "의견 충돌이 생기기 쉬우니 말은 한 템포 늦게.",
+           "오늘은 지키는 게 버는 것."),
+    "식신": (4, ["여유와 표현력이 살아나는 날. 먹고 즐기는 복이 있습니다.",
+               "재능이 자연스럽게 드러나는 날. 하던 일이 술술 풀립니다."],
+           "꾸준히 들고 가는 종목에 마음이 편한 날. 무리한 추가 매수보단 관망.",
+           "분위기 메이커가 되는 날. 맛있는 거 같이 먹으면 운이 붙습니다.",
+           "아이디어는 바로 메모하기."),
+    "상관": (3, ["말과 재치가 날카로워지는 날. 창의력은 최고, 말실수는 주의.",
+               "틀을 깨고 싶어지는 날. 새로운 시도에 끌립니다."],
+           "새 테마·신규 종목에 눈이 가는 날. 공부는 좋지만 진입은 신중히.",
+           "윗사람과의 말다툼 주의. 단톡방에서도 한 번 더 읽고 전송.",
+           "번뜩이는 생각은 실행 전에 하루 묵히기."),
+    "편재": (4, ["큰 돈의 흐름이 보이는 날. 활동 반경이 넓어집니다.",
+               "기회를 포착하는 감각이 좋아지는 날입니다."],
+           "투자 감각이 살아나는 날. 다만 수익 났다고 판을 키우진 말기.",
+           "사교 자리에서 좋은 정보가 들어옵니다.",
+           "들어온 기회는 잡되 손절 라인은 미리 정하기."),
+    "정재": (4, ["차곡차곡 쌓이는 날. 성실함이 그대로 결과로 돌아옵니다.",
+               "안정적인 재물운. 계획대로 움직이면 좋습니다."],
+           "분할 매수·장기 보유처럼 원칙 지키는 매매가 빛나는 날.",
+           "약속을 잘 지키면 신뢰가 쌓입니다.",
+           "가계부·포트폴리오 정리하기 좋은 날."),
+    "편관": (2, ["압박과 긴장이 들어오는 날. 일이 몰리고 책임이 커집니다.",
+               "예상 못 한 변수가 생기기 쉬운 날입니다."],
+           "변동성에 흔들리기 쉬운 날. 손절·익절 원칙을 기계적으로.",
+           "윗사람·규칙과 부딪히지 않게 조심. 무리한 약속은 금물.",
+           "버티는 힘이 곧 실력. 건강도 챙기세요."),
+    "정관": (4, ["질서와 명예의 기운. 인정받고 일이 바르게 풀리는 날.",
+               "책임감이 빛나는 날. 공식적인 일에 좋습니다."],
+           "원칙대로 하는 매매가 결과로 이어지는 날. 리포트·공시 꼼꼼히.",
+           "윗사람에게 인정받기 좋은 날. 예의가 운을 부릅니다.",
+           "정공법이 지름길."),
+    "편인": (3, ["직감과 아이디어가 번뜩이는 날. 혼자 생각할 시간이 필요합니다.",
+               "남다른 시각이 생기는 날. 다만 마음이 쉽게 바뀝니다."],
+           "남들이 안 보는 걸 보는 날. 다만 확신이 들 때까지 소액으로.",
+           "혼자만의 시간이 오히려 관계를 지켜줍니다.",
+           "공부·리서치에 몰입하기 좋은 날."),
+    "정인": (5, ["도움과 귀인의 기운. 배움과 문서운이 좋은 날.",
+               "든든한 지원군이 생기는 날. 마음이 편안해집니다."],
+           "좋은 정보·조언이 들어오는 날. 스터디 멤버 말에 귀 기울이기.",
+           "윗사람·선배의 도움이 있습니다. 감사 인사가 운을 키웁니다.",
+           "계약·서류 일은 오늘 처리하면 좋습니다."),
+}
+
+
+def _jdn(d: datetime.date) -> int:
+    return d.toordinal() + 1721425   # 율리우스 적일(JDN)
+
+
+def day_pillar(d: datetime.date):
+    """(천간 index, 지지 index). 2000-01-01 = 무오(戊午)일로 검증."""
+    j = _jdn(d)
+    return (j + 9) % 10, (j + 1) % 12
+
+
+def sipsin(me: int, other: int) -> str:
+    """일간 me 기준 천간 other의 십신."""
+    a, b = _ELEM[me], _ELEM[other]
+    same = (me % 2) == (other % 2)
+    if a == b:
+        return "비견" if same else "겁재"
+    if _GEN[a] == b:
+        return "식신" if same else "상관"
+    if _CTRL[a] == b:
+        return "편재" if same else "정재"
+    if _CTRL[b] == a:
+        return "편관" if same else "정관"
+    return "편인" if same else "정인"   # b가 a를 생함
+
+
+_FORTUNE_RE = re.compile(
+    r"^\s*(?:(\d{4}|\d{2})\s*(?:년|[./\-])\s*(\d{1,2})\s*(?:월|[./\-])\s*(\d{1,2})\s*일?"
+    r"|(\d{8}|\d{6}))\s*(?:생)?\s*(?:오늘\s*)?운세\s*[?？!.]*\s*$")
+
+
+def fortune_query(text: str, today=None):
+    """'1990.5.17 운세' → date(1990,5,17). 형식이 아니면 None, 날짜가 틀리면 'bad'."""
+    if not text or "#" in text:
+        return None
+    m = _FORTUNE_RE.match(text.strip())
+    if not m:
+        return None
+    if m.group(4):
+        s = m.group(4)
+        y, mo, d = (s[:4], s[4:6], s[6:]) if len(s) == 8 else (s[:2], s[2:4], s[4:])
+    else:
+        y, mo, d = m.group(1), m.group(2), m.group(3)
+    y, mo, d = int(y), int(mo), int(d)
+    t = today or today_kst()
+    if y < 100:
+        y += 2000 if y <= t.year % 100 else 1900
+    try:
+        b = datetime.date(y, mo, d)
+    except ValueError:
+        return "bad"
+    if b > t or b.year < 1900:
+        return "bad"
+    return b
+
+
+def fortune_text(birth: datetime.date, today=None) -> str:
+    t = today or today_kst()
+    ms, mb = day_pillar(birth)
+    ts, tb = day_pillar(t)
+    god = sipsin(ms, ts)
+    base, heads, money, people, tip = _SIPSIN[god]
+    pair = frozenset((mb, tb))
+    rel = ""
+    stars = base
+    if pair in _LIUHE:
+        stars += 1
+        rel = f"🤝 일지 {_BRANCHES[mb]}{_BRANCHES[tb]} 육합 — 사람과 일이 잘 맞물리는 날"
+    elif pair in _CHONG:
+        stars -= 1
+        rel = f"⚡ 일지 {_BRANCHES[mb]}{_BRANCHES[tb]} 충 — 변동·이동이 많은 날, 서두르지 말 것"
+    stars = max(1, min(5, stars))
+    # 같은 사람·같은 날이면 늘 같은 문장
+    seed = (birth.toordinal() * 31 + t.toordinal()) % len(heads)
+    me_el = _ELEM[ms]
+    helper = [k for k, v in _GEN.items() if v == me_el][0]   # 나를 생해 주는 오행 = 행운 기운
+    lines = [
+        f"🔮 {birth.year}.{birth.month}.{birth.day}생 오늘의 운세 ({t.month}/{t.day})",
+        f"일간 {_STEMS[ms]}{me_el}({_STEMS_H[ms]}{_ELEM_H[me_el]}) · 오늘 일진 "
+        f"{_STEMS[ts]}{_BRANCHES[tb]}({_STEMS_H[ts]}{_BRANCHES_H[tb]})일 → {god}의 날",
+        f"총운 {'★' * stars}{'☆' * (5 - stars)}",
+        heads[seed],
+    ]
+    if rel:
+        lines.append(rel)
+    lines += [
+        f"💰 재물·투자: {money}",
+        f"👥 사람: {people}",
+        f"💡 한마디: {tip}",
+        f"🍀 행운: {_LUCKY_COLOR[helper]} · 숫자 {_LUCKY_NUM[helper]} · {_LUCKY_DIR[helper]}",
+        "※ 생시 없이 일주로 본 재미용 운세예요. 매매는 원칙대로!",
+    ]
+    return "\n".join(lines)
+
+
+def handle_fortune(msg: dict) -> bool:
+    """운세 요청이면 답장하고 True."""
+    b = fortune_query(msg.get("text", "") or "")
+    if b is None:
+        return False
+    if time.time() - _weather_last["t"] < 2:
+        return True
+    _weather_last["t"] = time.time()
+    if b == "bad":
+        txt = "생년월일을 다시 확인해 주세요. 예) 1990.5.17 운세 / 900517 운세"
+    else:
+        try:
+            txt = fortune_text(b)
+        except Exception as e:
+            log(f"[운세] 생성 실패: {e}")
+            txt = "운세를 만들지 못했어요. 잠시 뒤 다시 시도해 주세요."
+    try:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      data={"chat_id": (msg.get("chat") or {}).get("id"), "text": txt,
+                            "reply_to_message_id": msg.get("message_id"),
+                            "allow_sending_without_reply": "true"}, timeout=15)
+    except Exception as e:
+        log(f"[운세] 답장 실패: {e}")
+    head = txt.splitlines()[1] if len(txt.splitlines()) > 1 else txt
+    log(f"[운세] {b} → {head}")
+    return True
+
+
 GROUP_ID_FILE = BASE_DIR / "_group_chat_id.txt"
 
 
@@ -1538,7 +1733,7 @@ def handle_message(msg: dict, cache: SheetCache):
 
     tag = detect_tag(text)
     if tag is None:
-        handle_weather(msg)   # '서울 중구 날씨' 같은 요청이면 답장
+        handle_weather(msg) or handle_fortune(msg)   # '서울 중구 날씨', '1990.5.17 운세' 요청이면 답장
         return  # 매수/매도 태그 없음 → 무시(알림 없음)
 
     frm = msg.get("from") or {}
