@@ -1483,9 +1483,8 @@ def handle_weather(msg: dict) -> bool:
     parsed = weather_query(msg.get("text", "") or "")
     if not parsed:
         return False
-    q, days, loose = parsed
-    if loose and geocode(q) is None:
-        return True   # '삼성전자 날씨 좋네' 같은 잡담 — 지명이 아니면 조용히 넘어간다
+    q, days, _loose = parsed
+    # 지명을 못 찾아도 반드시 '못 찾았어요'로 답한다. 조용히 넘기면 서버 장애로 오해한다(사용자 지시 11-12).
     if time.time() - _weather_last["t"] < 3:   # 연속 요청 과부하 방지
         return True
     _weather_last["t"] = time.time()
