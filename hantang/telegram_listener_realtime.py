@@ -1148,10 +1148,10 @@ class SheetCache:
 # 단톡방에서 누구든 '서울 중구 날씨'처럼 치면 그 지역의 지금 날씨를 답장한다.
 # 지명 → 좌표: OpenStreetMap Nominatim(무료, 초당 1회 제한 → 결과 캐시)
 # 날씨·미세먼지: Open-Meteo(무료, 카드뉴스 날씨와 같은 소스)
-_WEATHER_RE = re.compile(r"^\s*([가-힣A-Za-z0-9·\s]{1,20}?)\s*날씨\s*[?？!.]*\s*$")
-# '오늘 날씨', '요즘 날씨' 같은 잡담엔 반응하지 않는다
-_WEATHER_SKIP = {"오늘", "내일", "모레", "어제", "요즘", "지금", "이번주", "주말", "오늘의",
-                 "현재", "이런", "무슨", "좋은", "날씨", "추운", "더운", "미친", "실화", "와"}
+_WEATHER_RE = re.compile(r"^\s*([가-힣A-Za-z0-9·/.\s]{1,30}?)\s*날씨\s*[?？!.]*\s*$")
+# 장소 없이 이것만 있으면 잡담('오늘 날씨', '요즘 날씨 미쳤네')으로 보고 반응하지 않는다
+_WEATHER_SKIP = {"오늘", "내일", "모레", "글피", "어제", "요즘", "지금", "이번주", "주말", "오늘의",
+                 "현재", "이런", "무슨", "좋은", "날씨", "추운", "더운", "미친", "실화", "와", "다음주"}
 WEATHER_DESC = {
     0: "맑음", 1: "대체로 맑음", 2: "구름 조금", 3: "흐림", 45: "안개", 48: "안개",
     51: "이슬비", 53: "이슬비", 55: "이슬비", 56: "어는 이슬비", 57: "어는 이슬비",
@@ -1163,53 +1163,160 @@ WEATHER_DESC = {
 WEATHER_ICON = {0: "☀️", 1: "🌤", 2: "⛅", 3: "☁️", 45: "🌫", 48: "🌫"}
 _GEO_OK = {"city", "town", "village", "hamlet", "borough", "suburb", "quarter", "neighbourhood",
            "city_district", "district", "county", "state", "province", "municipality", "region",
-           "country", "island", "islet", "railway", "administrative"}
+           "country", "island", "islet", "railway", "administrative", "locality", "legal"}
 _geo_cache = {}
 _weather_last = {"t": 0.0}
+FORECAST_DAYS = 16   # Open-Meteo 예보 한도
+PAST_DAYS = 30       # 지난 날짜도 이 범위면 실측으로 답한다
+
+_KO_DAY = {"오늘": 0, "내일": 1, "낼": 1, "모레": 2, "글피": 3, "어제": -1, "그제": -2, "그저께": -2}
+_WD_IDX = {c: i for i, c in enumerate("월화수목금토일")}
 
 
-def weather_query(text: str):
-    """'서울 중구 날씨' → '서울 중구'. 날씨 요청 형식이 아니면 None."""
+def _parse_weather_dates(s: str, today: datetime.date):
+    """문자열에서 날짜 표현을 뽑는다. (남은 문자열, [날짜들] 또는 None=지금)."""
+    days = None
+
+    def take(pat, fn):
+        nonlocal s, days
+        m = re.search(pat, s)
+        if m and days is None:
+            days = fn(m)
+            s = (s[:m.start()] + " " + s[m.end():]).strip()
+
+    def md(mo, d):
+        try:
+            x = datetime.date(today.year, mo, d)
+        except ValueError:
+            return []
+        if x < today - datetime.timedelta(days=60):   # 1/5에 '12/30'이면 작년, 12월에 '1/3'이면 내년
+            x = datetime.date(today.year + 1, mo, d)
+        elif x > today + datetime.timedelta(days=300):
+            x = datetime.date(today.year - 1, mo, d)
+        return [x]
+
+    monday = today - datetime.timedelta(days=today.weekday())
+    take(r"(?<!\d)(1[0-2]|0?[1-9])\s*월\s*([12]\d|3[01]|0?[1-9])\s*일?",
+         lambda m: md(int(m.group(1)), int(m.group(2))))
+    take(r"(?<![\d/.])(1[0-2]|0?[1-9])\s*[/.]\s*([12]\d|3[01]|0?[1-9])(?![\d/.])",
+         lambda m: md(int(m.group(1)), int(m.group(2))))
+    take(r"(이번\s*주|다음\s*주|담주)?\s*주말",
+         lambda m: [monday + datetime.timedelta(days=(7 if m.group(1) and "이번" not in m.group(1) else 0) + k)
+                    for k in (5, 6)])
+    take(r"(이번\s*주|다음\s*주|담주)?\s*([월화수목금토일])\s*요일",
+         lambda m: [(lambda base: base if (m.group(1) or base >= today) else base + datetime.timedelta(days=7))(
+             monday + datetime.timedelta(days=(7 if m.group(1) and "이번" not in m.group(1) else 0)
+                                         + _WD_IDX[m.group(2)]))])
+    take(r"(다음\s*주|담주)",
+         lambda m: [monday + datetime.timedelta(days=7 + k) for k in range(7)])
+    take(r"이번\s*주",
+         lambda m: [today + datetime.timedelta(days=k) for k in range(7 - today.weekday())])
+    take(r"(?<![가-힣])(오늘|내일|낼|모레|글피|어제|그저께|그제)(?![가-힣])",
+         lambda m: [today + datetime.timedelta(days=_KO_DAY[m.group(1)])])
+    if days is not None and days == [today]:
+        days = None   # '오늘 ○○ 날씨'는 지금 날씨로
+    return re.sub(r"\s+", " ", s).strip(" ·"), days
+
+
+def weather_query(text: str, today=None):
+    """'서울 중구 날씨' → ('서울 중구', None), '내일 판교 날씨' → ('판교', [내일]).
+    날씨 요청 형식이 아니면 None."""
     if not text or "#" in text or "\n" in text.strip():
         return None
     m = _WEATHER_RE.match(text)
     if not m:
         return None
-    q = re.sub(r"\s+", " ", m.group(1)).strip(" ·")
+    q, days = _parse_weather_dates(re.sub(r"\s+", " ", m.group(1)).strip(" ·"), today or today_kst())
     if not q or q in _WEATHER_SKIP or q.split(" ")[0] in _WEATHER_SKIP:
         return None
-    return q
+    return q, days
+
+
+def _nominatim(q, kr=True):
+    params = {"q": q, "format": "json", "limit": 8, "accept-language": "ko"}
+    if kr:
+        params["countrycodes"] = "kr"
+    try:
+        rows = requests.get("https://nominatim.openstreetmap.org/search", params=params,
+                            headers={"User-Agent": "hantang-study-bot/1.0"}, timeout=10).json()
+    except Exception as e:
+        log(f"[날씨] 지명 검색 오류 {q}: {e}")
+        rows = []
+    time.sleep(1.1)   # Nominatim 이용 규칙: 초당 1회
+    return rows or []
+
+
+def _clean_parts(display_name):
+    parts = [p.strip() for p in (display_name or "").split(",")]
+    return [p for p in parts if p and not re.fullmatch(r"[\d\-]+", p) and p != "대한민국"]
+
+
+# 구·시·군 이름 줄임말. '동대문 날씨'가 동대문역·흥인지문(종로구)으로, '용산 날씨'가
+# 대구 용산역으로 잡혔다(2026-11-12). 여기 있는 이름이면 '동대문구'·'용산구'로 먼저 찾는다.
+_GU_NAMES = set("""종로 용산 성동 광진 동대문 중랑 성북 강북 도봉 노원 은평 서대문 마포 양천 강서 구로 금천
+영등포 동작 관악 서초 강남 송파 강동 영도 부산진 동래 해운대 사하 금정 연제 수영 사상 미추홀 연수 남동 부평
+계양 서해 검단 제물포 영종 수성 달서 광산 유성 대덕 분당 수지 기흥 처인 일산동 일산서 덕양 영통 팔달 권선 장안
+단원 상록 동안 만안 원미 소사 오정 수정 중원 상당 서원 흥덕 청원 의창 성산 마산합포 마산회원 진해""".split())
+_SI_NAMES = set("""수원 성남 고양 용인 부천 안산 안양 남양주 화성 평택 의정부 시흥 파주 김포 광명 군포 하남 오산
+이천 안성 의왕 양주 구리 포천 동두천 과천 여주 천안 청주 전주 창원 김해 포항 제주 서귀포 춘천 원주 강릉 목포
+여수 순천 경주 구미 진주 아산 양산 거제 익산 군산 충주 제천 당진 서산 논산 공주 보령 안동 김천 영주 상주
+경산 통영 사천 밀양 속초 동해 삼척 태백 정읍 남원 김제 나주 광양""".split())
+_GUN_NAMES = set("기장 달성 군위 울주 가평 양평 연천 강화 옹진 홍천 횡성 평창 정선 양양 고성 철원 화천 양구 인제".split())
+
+
+def _named_hit(rows, name):
+    """첫 칸 이름이 정확히 name인 행정구역 결과(여럿이면 서울 우선)."""
+    c = [x for x in rows if x.get("addresstype") in _GEO_OK
+         and x.get("addresstype") not in ("railway", "island", "islet")
+         and (_clean_parts(x.get("display_name")) or [""])[0] == name]
+    c.sort(key=lambda x: "서울특별시" not in x.get("display_name", ""))
+    return c[0] if c else None
 
 
 def geocode(q: str):
-    """(위도, 경도, 표시 이름) 또는 None. 국내 먼저, 없으면 해외."""
+    """(위도, 경도, 표시 이름, 국내여부) 또는 None. 찾는 순서:
+    ① 구·시·군 줄임말이면 '○○구/시/군'으로(동대문→동대문구) ② 이름이 정확히 같은 행정구역
+    ③ 국내 행정구역·역·섬 ④ '○○동'으로 다시(청라→청라동) ⑤ 주소에 그 이름이 든 동네 ⑥ 해외.
+    2026-11-12 '청라'가 강남 식당·고속도로 나들목으로만, '동대문'이 종로구 동대문역으로 잡혔다."""
     if q in _geo_cache:
         return _geo_cache[q]
-    hit = None
-    for cc in ("kr", None):
-        params = {"q": q, "format": "json", "limit": 3, "accept-language": "ko"}
-        if cc:
-            params["countrycodes"] = cc
-        try:
-            rows = requests.get("https://nominatim.openstreetmap.org/search", params=params,
-                                headers={"User-Agent": "hantang-study-bot/1.0"}, timeout=10).json()
-        except Exception as e:
-            log(f"[날씨] 지명 검색 오류 {q}: {e}")
-            rows = []
-        time.sleep(1.1)   # Nominatim 이용 규칙: 초당 1회
-        for x in rows or []:
-            if x.get("addresstype") in _GEO_OK:
-                hit = x
+    hit, label, rows = None, None, []
+    bare = " " not in q and not q.endswith(("동", "구", "시", "군", "읍", "면", "도"))
+    if bare:
+        for suf, names in (("구", _GU_NAMES), ("시", _SI_NAMES), ("군", _GUN_NAMES)):
+            if q in names:
+                r = _nominatim(q + suf)
+                hit = _named_hit(r, q + suf)
+                if hit:
+                    break
+    if not hit:
+        rows = _nominatim(q)
+        hit = _named_hit(rows, q) or next((x for x in rows if x.get("addresstype") in _GEO_OK), None)
+    if not hit and bare:
+        rows2 = _nominatim(q + "동")
+        hit = next((x for x in rows2 if x.get("addresstype") in _GEO_OK), None)
+        rows = rows + rows2
+    if not hit:
+        # 주소 칸(첫 칸=장소 이름 제외)에 q로 시작하는 동네가 있는 결과
+        key = q.replace(" ", "")
+        for x in rows:
+            parts = _clean_parts(x.get("display_name"))
+            for i, p in enumerate(parts[1:], start=1):
+                if p.replace(" ", "").startswith(key) and re.search(r"(동|구|시|군|읍|면|신도시|지구)$", p):
+                    hit = x
+                    label = " ".join(list(reversed(parts[i:]))[:3])
+                    break
+            if hit:
                 break
-        if hit:
-            break
+    if not hit:
+        rows = _nominatim(q, kr=False)
+        hit = next((x for x in rows if x.get("addresstype") in _GEO_OK), None)
     if not hit:
         _geo_cache[q] = None
         return None
-    parts = [p.strip() for p in hit.get("display_name", "").split(",")]
-    parts = [p for p in parts if p and not re.fullmatch(r"[\d\-]+", p) and p != "대한민국"]
-    # '중구, 서울특별시' → '서울특별시 중구' (큰 단위부터, 최대 3단계)
-    label = " ".join(list(reversed(parts))[:3]) or q
+    if not label:
+        # '중구, 서울특별시' → '서울특별시 중구' (큰 단위부터, 최대 3단계)
+        label = " ".join(list(reversed(_clean_parts(hit.get("display_name"))))[:3]) or q
     out = (float(hit["lat"]), float(hit["lon"]), label, "대한민국" in hit.get("display_name", ""))
     _geo_cache[q] = out
     return out
@@ -1223,11 +1330,25 @@ def _pm_grade(v, kind):
     return f"{g}({round(v)})"
 
 
-def weather_text(q: str) -> str:
-    geo = geocode(q)
-    if not geo:
-        return f"'{q}' 지역을 찾지 못했어요. 예) 서울 중구 날씨, 판교 날씨"
-    lat, lon, label, is_kr = geo
+def _wx_icon(code):
+    if code in WEATHER_ICON:
+        return WEATHER_ICON[code]
+    if code is None:
+        return "🌡"
+    if 51 <= code <= 67 or code in (80, 81, 82):
+        return "🌧"
+    if 71 <= code <= 86:
+        return "🌨"
+    if code >= 95:
+        return "⛈"
+    return "🌡"
+
+
+def _md_wd(d: datetime.date) -> str:
+    return f"{d.month}/{d.day}({'월화수목금토일'[d.weekday()]})"
+
+
+def weather_now_text(lat, lon, label, is_kr) -> str:
     w = requests.get("https://api.open-meteo.com/v1/forecast", params={
         "latitude": lat, "longitude": lon, "timezone": "auto", "wind_speed_unit": "ms",
         "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
@@ -1236,10 +1357,8 @@ def weather_text(q: str) -> str:
         "forecast_days": 1}, timeout=10).json()
     cur, day = w["current"], w.get("daily", {})
     code = cur.get("weather_code")
-    icon = WEATHER_ICON.get(code, "🌧" if code and 51 <= code <= 67 or code in (80, 81, 82) else
-                            "🌨" if code and 71 <= code <= 86 else "⛈" if code and code >= 95 else "🌡")
     hhmm = str(cur.get("time", ""))[-5:]
-    lines = [f"{icon} {label} 지금 날씨 ({hhmm}{'' if is_kr else ' 현지'})",
+    lines = [f"{_wx_icon(code)} {label} 지금 날씨 ({hhmm}{'' if is_kr else ' 현지'})",
              f"{WEATHER_DESC.get(code, '')} {cur['temperature_2m']:.1f}°C (체감 {cur['apparent_temperature']:.1f}°C)"]
     extra = []
     try:
@@ -1262,18 +1381,102 @@ def weather_text(q: str) -> str:
     return "\n".join(lines)
 
 
+def weather_days_text(lat, lon, label, days, today) -> str:
+    """특정일(들) 날씨. 지난 날은 실측, 오늘 이후는 예보. 미세먼지는 예보가 있는 날(약 5일)만."""
+    lo, hi = today - datetime.timedelta(days=PAST_DAYS), today + datetime.timedelta(days=FORECAST_DAYS - 1)
+    ok = [d for d in days if lo <= d <= hi]
+    if not ok:
+        d0 = days[0]
+        if d0 > hi:
+            return f"{_md_wd(d0)} 날씨는 아직 예보가 없어요 (약 {FORECAST_DAYS}일 뒤까지만 나와요)"
+        return f"{_md_wd(d0)}은 너무 지난 날짜라 조회가 안 돼요 (최근 {PAST_DAYS}일까지)"
+    start, end = min(ok), max(ok)
+    w = requests.get("https://api.open-meteo.com/v1/forecast", params={
+        "latitude": lat, "longitude": lon, "timezone": "auto", "wind_speed_unit": "ms",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+                 "precipitation_sum,wind_speed_10m_max",
+        "start_date": str(start), "end_date": str(end)}, timeout=10).json()
+    dl = w.get("daily", {})
+    rows = {}
+    for i, t in enumerate(dl.get("time", [])):
+        rows[t] = {k: (v[i] if i < len(v) else None) for k, v in dl.items()}
+    # 미세먼지 예보(일평균) — 있는 날만
+    pm = {}
+    try:
+        aq = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params={
+            "latitude": lat, "longitude": lon, "hourly": "pm10,pm2_5", "timezone": "auto",
+            "start_date": str(start), "end_date": str(end)}, timeout=10).json().get("hourly", {})
+        acc = {}
+        for t, a, b in zip(aq.get("time", []), aq.get("pm10", []), aq.get("pm2_5", [])):
+            if a is not None and b is not None:
+                acc.setdefault(t[:10], []).append((a, b))
+        pm = {d: (sum(x for x, _ in v) / len(v), sum(y for _, y in v) / len(v)) for d, v in acc.items()}
+    except Exception:
+        pass
+
+    def one(d, r):
+        code = r.get("weather_code")
+        bits = [f"{WEATHER_DESC.get(code, '')} 최고 {r['temperature_2m_max']:.0f}° / 최저 {r['temperature_2m_min']:.0f}°"]
+        if d >= today and r.get("precipitation_probability_max") is not None:
+            bits.append(f"강수확률 {r['precipitation_probability_max']}%")
+        if (r.get("precipitation_sum") or 0) >= 0.1:
+            bits.append(f"강수량 {r['precipitation_sum']:.1f}mm")
+        return code, bits
+
+    past = all(d < today for d in ok)
+    tail = " (실측)" if past else ""
+    if len(ok) == 1:
+        d = ok[0]
+        r = rows.get(str(d))
+        if not r or r.get("temperature_2m_max") is None:
+            return f"{label} {_md_wd(d)} 날씨 정보를 가져오지 못했어요."
+        code, bits = one(d, r)
+        lines = [f"{_wx_icon(code)} {label} {_md_wd(d)} 날씨{tail}", bits[0]]
+        rest = bits[1:]
+        if r.get("wind_speed_10m_max") is not None:
+            rest.append(f"바람 최대 {r['wind_speed_10m_max']:.1f}m/s")
+        if rest:
+            lines.append(" · ".join(rest))
+        if str(d) in pm:
+            a, b = pm[str(d)]
+            lines.append(f"미세먼지 {_pm_grade(a, 'pm10')} · 초미세먼지 {_pm_grade(b, 'pm25')} "
+                         f"(하루 평균{'' if d < today else ' 예보'})")
+        return "\n".join(lines)
+    lines = [f"📅 {label} 날씨 {_md_wd(ok[0])}~{_md_wd(ok[-1])}{tail}"]
+    for d in ok:
+        r = rows.get(str(d))
+        if not r or r.get("temperature_2m_max") is None:
+            continue
+        code, bits = one(d, r)
+        lines.append(f"{_md_wd(d)} {_wx_icon(code)} " + " · ".join(bits))
+    if len(ok) < len(days):
+        lines.append(f"※ {FORECAST_DAYS}일 뒤부터는 아직 예보가 없어요")
+    return "\n".join(lines)
+
+
+def weather_text(q: str, days=None, today=None) -> str:
+    geo = geocode(q)
+    if not geo:
+        return f"'{q}' 지역을 찾지 못했어요. 예) 서울 중구 날씨, 청라동 내일 날씨"
+    lat, lon, label, is_kr = geo
+    if not days:
+        return weather_now_text(lat, lon, label, is_kr)
+    return weather_days_text(lat, lon, label, days, today or today_kst())
+
+
 def handle_weather(msg: dict) -> bool:
     """날씨 요청이면 답장하고 True."""
-    q = weather_query(msg.get("text", "") or "")
-    if not q:
+    parsed = weather_query(msg.get("text", "") or "")
+    if not parsed:
         return False
+    q, days = parsed
     if time.time() - _weather_last["t"] < 3:   # 연속 요청 과부하 방지
         return True
     _weather_last["t"] = time.time()
     try:
-        txt = weather_text(q)
+        txt = weather_text(q, days)
     except Exception as e:
-        log(f"[날씨] 조회 실패 {q}: {e}")
+        log(f"[날씨] 조회 실패 {q} {days}: {e}")
         txt = "날씨 정보를 가져오지 못했어요. 잠시 뒤 다시 시도해 주세요."
     chat_id = (msg.get("chat") or {}).get("id")
     try:
@@ -1283,7 +1486,7 @@ def handle_weather(msg: dict) -> bool:
                             "allow_sending_without_reply": "true"}, timeout=15)
     except Exception as e:
         log(f"[날씨] 답장 실패: {e}")
-    log(f"[날씨] '{q}' → {txt.splitlines()[0]}")
+    log(f"[날씨] '{q}' {days or '지금'} → {txt.splitlines()[0]}")
     return True
 
 
