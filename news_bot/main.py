@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
-from collector import fetch_new_articles, format_article
+from collector import fetch_new_articles, format_article, LLM_STATE, NAVER_ENABLED, AI_REJECTED
 
 KST = ZoneInfo('Asia/Seoul')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -79,12 +79,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def _llm_status_text() -> str:
+    if LLM_STATE['ok'] is None:
+        return '아직 호출 전'
+    return '정상' if LLM_STATE['ok'] else f"고장 — {LLM_STATE['error']}"
+
+
+_reported = {'llm': None, 'naver': False}
+
+
+async def report_filter_state(context):
+    """AI 판정·네이버 수집 상태를 관리자에게 알린다.
+
+    둘 다 고장 나도 봇은 계속 돌기 때문에, 알리지 않으면 아무도 모른 채 몇 달이 간다.
+    AI 판정은 상태가 바뀔 때마다, 네이버 수집 꺼짐은 봇이 켜질 때 한 번 알린다.
+    """
+    notes = []
+    if not NAVER_ENABLED and not _reported['naver']:
+        _reported['naver'] = True
+        notes.append("ℹ️ 네이버 수집이 꺼져 있습니다 (NAVER_CLIENT_ID·SECRET 없음). 구글·언론사 피드만 읽습니다.")
+    ok = LLM_STATE['ok']
+    if ok is not None and ok != _reported['llm']:
+        _reported['llm'] = ok
+        notes.append("✅ AI 판정이 정상 작동합니다." if ok else
+                     "⚠️ AI 판정이 작동하지 않습니다. 복구될 때까지 [단독]·허용어 기사만 보냅니다.\n" + LLM_STATE['error'])
+    for text in notes:
+        try:
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+        except Exception as e:
+            logger.error(f"상태 알림 전송 오류: {e}")
+
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ <b>봇 정상 작동 중</b>\n"
         f"⏱ 확인 주기: {CHECK_INTERVAL}분마다\n"
         f"📢 뉴스 발송 채널: <code>{BROADCAST_CHAT_ID}</code>\n"
-        f"🛠 관리자 채팅: <code>{ADMIN_CHAT_ID}</code>",
+        f"🛠 관리자 채팅: <code>{ADMIN_CHAT_ID}</code>\n"
+        f"🤖 AI 판정: {_llm_status_text()}\n"
+        f"🔎 네이버 수집: {'켜짐' if NAVER_ENABLED else '꺼짐 (키 없음)'}",
         parse_mode='HTML'
     )
 
@@ -114,6 +147,27 @@ async def heartbeat(context):
         )
     except Exception as e:
         logger.error(f"하트비트 전송 오류: {e}")
+    await send_rejected_digest(context)
+
+
+async def send_rejected_digest(context):
+    """AI가 거른 기사 제목을 관리자에게 보여준다. 잘못 거른 기사가 있으면 판정 기준을 고칠 근거가 된다."""
+    if not AI_REJECTED:
+        return
+    titles = AI_REJECTED[:]
+    AI_REJECTED.clear()
+    lines = [f"🤖 AI가 거른 기사 {len(titles)}건 (잘못 거른 것이 있으면 알려주세요)"] + [f"· {t[:70]}" for t in titles]
+    chunk = ''
+    try:
+        for line in lines:
+            if len(chunk) + len(line) > 3500:
+                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=chunk)
+                chunk = ''
+            chunk += line + '\n'
+        if chunk:
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=chunk)
+    except Exception as e:
+        logger.error(f"AI 차단 목록 전송 오류: {e}")
 
 
 async def send_pending(context):
@@ -146,6 +200,7 @@ async def scheduled_check(context):
     hour = datetime.now(KST).hour
     try:
         articles = fetch_new_articles()
+        await report_filter_state(context)
         if not articles:
             return
         # 수면시간(22:00~06:00 KST): 큐에 저장

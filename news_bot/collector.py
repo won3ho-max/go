@@ -1,11 +1,12 @@
 import feedparser
-# redeploy: 봇 재기동 (서버 프로세스 중단 복구) @ 2026-07-06T05:32Z
 import requests
 import hashlib
+import html
 import json
 import os
 import re
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 from dotenv import load_dotenv
@@ -13,56 +14,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# ─── Anthropic API ────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
-
-# 신뢰 출처 — 패턴 필터 통과 시 LLM 체크 없이 그대로 통과
-# (주요 뉴스통신사·경제지·종합지·방송 등)
-TRUSTED_DOMAINS = {
-    # 뉴스통신사
-    'yna.co.kr', 'newsis.com', 'news1.kr', 'einfomax.co.kr',
-    # 경제·금융 전문지 (대형)
-    'mk.co.kr', 'hankyung.com', 'sedaily.com',
-    'mt.co.kr', 'fnnews.com', 'asiae.co.kr',
-    'edaily.co.kr', 'heraldcorp.com', 'etoday.co.kr',
-    'newspim.com', 'thebell.co.kr', 'businesspost.co.kr',
-    'inews24.com', 'ajunews.com', 'fntoday.co.kr',
-    'fntimes.com', 'bizwatch.co.kr', 'moneys.co.kr',
-    'newstomato.com', 'dealsite.co.kr', 'investchosun.com',
-    'economist.co.kr', 'sisajournal.com', 'sisain.co.kr',
-    'seoulfn.com', 'efnews.co.kr', 'joseilbo.com',
-    'taxtimes.co.kr', 'insure.co.kr', 'aitimes.com',
-    'econovill.com', 'forbes.co.kr', 'thescoop.co.kr',
-    'newdaily.co.kr', 'polinews.co.kr', 'newsworks.co.kr',
-    # 종합일간지
-    'chosun.com', 'joongang.co.kr', 'donga.com',
-    'hani.co.kr', 'khan.co.kr', 'kmib.co.kr',
-    'segye.com', 'munhwa.com', 'hankookilbo.com',
-    'naeil.com', 'kukinews.com', 'pressian.com',
-    'ohmynews.com', 'mediatoday.co.kr', 'dailian.co.kr',
-    'wikileaks-kr.org', 'sisaon.com', 'sisaweek.com',
-    # 방송·TV
-    'ytn.co.kr', 'mbc.co.kr', 'kbs.co.kr', 'sbs.co.kr',
-    'jtbc.co.kr', 'tvchosun.com', 'ichannela.com', 'mbn.co.kr',
-    'mtn.co.kr', 'wowtv.co.kr', 'sentv.co.kr', 'mktv.co.kr',
-    'yonhapnewstv.co.kr', 'cbs.co.kr', 'nocutnews.co.kr',
-    'tbs.seoul.kr', 'obs.co.kr', 'arirang.com',
-    # IT·전문지
-    'etnews.com', 'zdnet.co.kr', 'bloter.net', 'ddaily.co.kr',
-    'boannews.com', 'dt.co.kr', 'itdaily.kr', 'aitimes.kr',
-    'venturesquare.net', 'platum.kr', 'irobotnews.com',
-    # 지역 주요 일간지 (광역시·도 단위)
-    'busan.com', 'kookje.co.kr', 'knnews.co.kr',
-    'yeongnam.com', 'imaeil.com', 'daejonilbo.com',
-    'cctoday.co.kr', 'kwangju.co.kr', 'jnilbo.com',
-    'jjan.kr', 'domin.co.kr', 'kwnews.co.kr', 'kado.net',
-    'jejunews.com', 'ihalla.com', 'incheonilbo.com',
-    'kyeonggi.com', 'joongdo.co.kr',
-    # 기타
-    'tf.co.kr', 'newswire.co.kr',
-}
-
 
 # 차단 도메인 — 금융·경영과 무관한 지역 농업지·저품질 매체
 # 이 도메인에서 온 기사는 is_relevant() 체크 전에 즉시 차단
@@ -88,6 +39,9 @@ BLOCKED_SOURCE_NAMES = {
     '시민행정신문', '경기경제신문', '안전신문', '농수축산신문',
     '일간경기', 'gmitoday', '위즈뉴스', '투데이안',
     '뉴스포스트',  # 반부패·청렴 행사성 기사 다수
+    # 기사를 옮겨 실은 블로그·카페·자사 콘텐츠 포털 (원 기사와 중복)
+    'Naver Blog', '네이버 블로그', '네이버 카페', 'Daum 카페', 'Tistory', '티스토리', '브런치',
+    'KB Think',
     '팜인사이트',  # 농업 전문지 — 한우·축산·농산물 수출 등 농축산 홍보 기사 다수
 }
 
@@ -100,8 +54,8 @@ def _get_domain(url: str) -> str:
         return ''
 
 
-# 주요 경영진 실명 — 제목에 등장하면 신뢰 출처라도 LLM 체크 강제
-# (모내기·행사 등 PR 기사가 LLM 없이 통과되는 것을 방지)
+# 주요 경영진 실명 — 제목에 회사명이 없어도 수집 범위에 넣기 위한 목록.
+# 이름이 있다고 통과시키지는 않는다(동정·사진 기사가 대부분이라 AI 판정을 거친다).
 EXEC_NAMES = {
     # 농협 (강호동: 중앙회장, 박서홍: 부회장, 이찬우: 농협금융 회장, 강태영: 농협은행장)
     '강호동', '박서홍', '이찬우', '강태영',
@@ -160,19 +114,23 @@ EXEC_NAMES = {
 }
 
 
+# 일반명사·동명이인과 겹치는 이름은 회사명이 함께 있을 때만 경영진으로 본다
+# (신학기=새 학기, 강호동=방송인, 이은미=가수, 김성태=정치인)
+AMBIGUOUS_EXEC_NAMES = {
+    '신학기': ('수협',),
+    '강호동': ('농협',),
+    '이은미': ('토스',),
+    '김성태': ('기업은행', 'IBK'),
+}
+
+
 def _has_exec_name(title: str) -> bool:
-    return any(name in title for name in EXEC_NAMES)
-
-
-def _is_clickbait_pass(title: str) -> bool:
-    """클릭베이트 제목 판단 — 회사명 KEYWORDS는 없고 금융상품어만 있는 경우.
-    True면 신뢰 출처라도 LLM 강제 검증을 거치게 함 (PR성 기사 차단 강화).
-    """
-    if any(kw in title for kw in KEYWORDS):
-        return False
-    has_gumgo = '금고' in title and '새마을금고' not in title and '새마을' not in title
-    has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
-    return has_gumgo or has_product_hint
+    for name in EXEC_NAMES:
+        if name in title:
+            context = AMBIGUOUS_EXEC_NAMES.get(name)
+            if context is None or any(c in title for c in context):
+                return True
+    return False
 
 
 def _is_blocked_source(url: str, source_name: str = '') -> bool:
@@ -188,94 +146,147 @@ def _is_blocked_source(url: str, source_name: str = '') -> bool:
     return False
 
 
-def _is_trusted_source(url: str) -> bool:
-    """신뢰 출처 여부 확인"""
-    domain = _get_domain(url)
-    return any(trusted in domain for trusted in TRUSTED_DOMAINS)
+# ─── AI 판정 ──────────────────────────────────────────────────────
+# 규칙 단계를 지난 후보는 전부 AI가 "보낼 기사인가"를 판정한다.
+# 보도자료는 통신사·경제지도 그대로 싣기 때문에 매체를 보고 면제하지 않는다.
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+LLM_MODEL = 'claude-haiku-5-5'
+LLM_BATCH = 15  # 한 번의 호출로 판정할 기사 수
 
+# AI 판정 상태 — main.py가 읽어 관리자에게 알린다.
+# 2026-02에 모델이 폐기된 뒤 오류가 조용히 '통과'로 처리돼 9개월간 아무도 몰랐다. 다시는 조용히 넘기지 않는다.
+LLM_STATE = {'ok': None, 'error': ''}  # ok: True 정상 / False 고장 / None 아직 호출 전
 
-# LLM 결과 캐시 (같은 제목 반복 호출 방지)
 _llm_cache: dict[str, bool] = {}
+# AI가 거른 기사 제목 — main.py가 하루 한 번 관리자에게 보여주고 비운다 (판정 기준 점검용)
+AI_REJECTED: list = []
+
+JUDGE_SYSTEM = """당신은 머니투데이방송(MTN) 금융부 기자들이 보는 텔레그램 채널의 뉴스 선별 담당이다.
+이 채널은 기자가 취재·발제에 쓸 금융권 뉴스만 받는다. 회사가 낸 보도자료를 옮긴 기사와 자잘한 소식이 섞이면 정작 중요한 기사가 묻히기 때문에, 그런 기사를 걸러내는 것이 당신의 일이다.
+
+대상 업권: 은행·금융지주·보험·카드·저축은행·상호금융(농협·수협·신협·새마을금고)·인터넷은행, 금융당국(금융위·금감원·한국은행·예금보험공사)과 금융 정책, 해외 주요 중앙은행.
+
+보낸다 — 새로운 사실·수치·결정·갈등이 담긴 기사:
+- 실적, 건전성, 연체·부실, 자본 확충·증자·배당
+- 당국의 제재·검사·제도 변경·규제 발표, 법 개정
+- CEO·임원 인선과 연임·사퇴, 지배구조·선거제도(농협중앙회장 직선제, 농협법 개정 등)
+- 횡령·배임·금융사고·수사·소송·과징금, 내부통제 문제, 노사 갈등
+- 금리·가계부채·대출 규제·환율 등 금융시장과 정책 분석
+- 인수합병·매각·출자, 지자체 금고 선정 경쟁
+- 경영진이나 회사를 비판적으로 다룬 기사, [단독] 취재 기사
+
+보내지 않는다 — 보도자료성 기사와 자잘한 기사:
+- 사회공헌·봉사·기부·나눔·김장·일손돕기, 농산물·수산물 판촉과 소비 촉진
+- 협약(MOU)·제휴·회동·접견·면담, 행사·세미나·포럼·시상·수상·기념식
+- 경영진 동정: 특강, 현장 방문, 간담회 참석, 해외 인사 접견, 행사 발언처럼 일정을 알리는 기사와 사진 설명 기사
+- 상품·서비스·앱 출시와 개편, 이벤트·우대금리 홍보, 채용 절차 안내
+- "~에 앞장", "~ 강화", "~ 박차", "~ 나선다"처럼 회사가 주어인 자기 홍보성 제목
+- 소비자 생활 팁, 상품 비교, 퀴즈 정답, 환율·시세 표
+- 칼럼·기고·사설·인터뷰 연재. 단, [금융 히스토리]·[금융 인사이트]·[금융 풍속도]·[금융 IN]·[금융 NOW]·[CEO 라운지] 연재는 보낸다
+- 증권사·자산운용사만 다룬 기사, 개별 종목 주가·목표가·특징주 기사. 단, 지주나 은행이 함께 걸린 그룹 차원 사안은 보낸다
+- 금융권과 직접 관련이 없는 일반 경제·부동산·정치·연예 기사
+
+농협·수협은 금융기관이면서 농어민 협동조합이라 농촌·어촌 활동 기사가 매우 많다. 이 채널이 원하는 것은 금융·경영·지배구조 쪽이다.
+- 중앙회·금융지주·은행·보험 같은 전국 조직은 위 기준대로 판단한다.
+- 지역 단위 조합(○○농협·○○축협·○○수협)과 지역본부·시군지부는 횡령·금융사고·수사·부실·합병·선거 비리 같은 사건일 때만 보낸다. 실적 자랑, 행사, 조합원 지원, 농산물 소식은 보내지 않는다.
+
+애매하면 제목에 새로운 사실(수치·결정·갈등)이 있는지를 본다. 있으면 보내고, 회사가 한 일을 알리는 데 그치면 보내지 않는다.
+
+기사 목록이 번호와 함께 주어진다. 기사마다 보낼지(send)를 판정한다."""
+
+_JUDGE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'verdicts': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {'n': {'type': 'integer'}, 'send': {'type': 'boolean'}},
+                'required': ['n', 'send'],
+                'additionalProperties': False,
+            },
+        },
+    },
+    'required': ['verdicts'],
+    'additionalProperties': False,
+}
 
 
-def _llm_filter(title: str, summary: str = '') -> bool:
-    """Claude Haiku로 기사 뉴스 가치 판단.
-    True = 통과 (뉴스 가치 있음)
-    False = 차단 (홍보·행사·마케팅성)
+def _judge_line(n: int, item: dict) -> str:
+    title = item['title']
+    summary = _strip_html(item.get('summary', ''))
+    # Google 뉴스 요약은 '제목 + 매체명'뿐이라 정보가 없다 — 제목과 겹치면 뺀다
+    if summary and _normalize_title(title)[:20] not in summary:
+        return f"{n}. {title} | 요약: {summary[:150]}"
+    return f"{n}. {title}"
+
+
+def _llm_judge(items: list) -> dict:
+    """제목 → 보낼지 여부(bool).
+
+    판정하지 못한 제목은 결과에 넣지 않는다. 호출부가 그 기사는 엄격 규칙으로 대신 판단한다
+    (예전처럼 오류를 '통과'로 처리하지 않는다).
     """
+    verdicts, todo, queued = {}, [], set()
+    for it in items:
+        key = it['title'].strip()
+        if key in _llm_cache:
+            verdicts[key] = _llm_cache[key]
+        elif key not in queued:
+            queued.add(key)
+            todo.append(it)
+    if not todo:
+        return verdicts
     if not ANTHROPIC_API_KEY:
-        return True  # API 키 미설정 시 통과
-
-    cache_key = title.strip()
-    if cache_key in _llm_cache:
-        return _llm_cache[cache_key]
+        LLM_STATE.update(ok=False, error='ANTHROPIC_API_KEY가 설정되지 않음')
+        return verdicts
+    if len(_llm_cache) > 5000:
+        _llm_cache.clear()
 
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-        prompt = f"""국내 주요 금융권(시중·지방·인터넷은행, 보험, 저축은행, 상호금융, 카드, 농협·수협) 뉴스 필터입니다.
-아래 기사가 "주요 금융권의 금융·경영 핵심 뉴스"인지 판단하세요. 단, 증권사·자산운용사 단독 기사는 모두 NO.
-
-【YES — 통과】아래 유형만 통과:
-- 순이익·영업이익·자산·대출 등 금융 실적
-- 금감원·금융위 규제, 법령 개정, 제재
-- 행장·대표이사 취임·해임·사퇴 등 주요 인사
-- 횡령·배임·수사·압수수색·검찰 관련 사건
-- 금리·시장·부실·연체·건전성 분석
-- 유상증자·자본 확충·출자·자본정책: 그룹 차원 또는 계열사 대상 증자, CET1·RWA 등 자본 건전성 대응
-- 농협 지배구조·선출제도 변경: 직선제·간선제·선거제도 개편, 회장 선출방식 수용·거부·철회 발표
-- 중앙회장·행장의 주요 정책 공식 발표 또는 입장 표명 (개혁안 수용, 제도 변경 등)
-- 논란·의혹·비판: 경영진 행보 관련 비판적 보도, 오락가락 행보, 번복 등
-
-【NO — 차단】아래는 예외 없이 차단:
-- TV광고 공개, 모델 발탁, 브랜드 홍보
-- 감사패·표창·수상·시상식 (경찰청장 감사패 등)
-- 피해농가·피해어가 지원, 화재 복구 지원, 농촌·어촌 봉사, 모내기·어업 봉사 등 1차산업 현장 활동
-- 협약·MOU·업무협약·파트너십 체결
-- 금융교육, 캠페인, 이벤트, 행사
-- 지역 농협 행사, 지역사회 활동
-- 전기차·농산물·축산·수산물·어업 활동 등 금융과 무관한 주제
-- 지방선거 출마, 정치 기사
-- 증권사·자산운용사 단독 기사 (KB증권, NH투자증권, 미래에셋자산운용 등이 메인 주체인 경우)
-  * 단, 지주·은행이 함께 등장하는 그룹 차원 기사는 YES (예: 'KB금융, KB증권 인수' 등)
-- 신규 금융상품 출시·홍보 (단순 상품 출시·인기·완판·매진·페이백 강조)
-  * 다만 정부·금융당국이 주도하는 공적 펀드·정책상품의 시장 반응은 YES로 처리
-- 지역 단독 단위 농협·축협·수협 PR (XX농협 OO 돌파/달성, 지역 행사·실적 홍보)
-  * 예: '보은농협 상호금융 대출금 2000억 돌파', 'OO지역농협 한우경진대회'
-- 행장·임원 현장 방문·동정 (스타트업 방문·간담회·소통 등 단순 동정 기사)
-- 사회공헌 일자리 확대 (장애인 일터·굿윌스토어·발달장애인 고용 등 ESG 홍보)
-- 자산관리 세미나·머니쇼 등 행사 개최 자체
-- 경영 비전·전략 선포 홍보 (X조로 Y한다, 상생성장, 돈길 튼다, OOO에 앞장 등 클리셰 제목)
-- 칼럼·기고·인터뷰 시리즈 (금융기업가정신, 인물탐방, 기명 시리즈 등)
-- IT 인프라·내부 시스템 구축 (감리원 확충, 정보시스템 구축 등 — 금융 리스크 자체가 아닌 IT 행정)
-- 반부패·청렴·내부통제 행사·회의 개최 (추진계획 점검, 논의 등 내부 행정 행사)
-
-제목: {title}
-요약: {summary[:200] if summary else '없음'}
-
-YES 또는 NO만 답하세요."""
-
-        msg = client.messages.create(
-            model='claude-3-5-haiku-20241022',
-            max_tokens=5,
-            messages=[{'role': 'user', 'content': prompt}],
-        )
-        result = msg.content[0].text.strip().upper()
-        passed = result.startswith('Y')
-        _llm_cache[cache_key] = passed
-        if not passed:
-            logger.info(f"LLM 차단: {title[:60]}")
-        return passed
-
+        for i in range(0, len(todo), LLM_BATCH):
+            batch = todo[i:i + LLM_BATCH]
+            listing = '\n'.join(_judge_line(n, it) for n, it in enumerate(batch, 1))
+            msg = client.messages.create(
+                model=LLM_MODEL,
+                max_tokens=1500,
+                system=JUDGE_SYSTEM,
+                messages=[{'role': 'user', 'content': listing}],
+                # 서버에 깔린 SDK가 구버전이어도 동작하도록 본문에 직접 싣는다.
+                # 분류 작업이라 생각 단계는 끄고, 출력은 JSON 스키마로 고정한다.
+                extra_body={
+                    'thinking': {'type': 'disabled'},
+                    'output_config': {'effort': 'low', 'format': {'type': 'json_schema', 'schema': _JUDGE_SCHEMA}},
+                },
+            )
+            if msg.stop_reason == 'refusal':
+                logger.warning("AI 판정 거절 — 이 묶음은 엄격 규칙으로 대체")
+                continue
+            text = ''.join(b.text for b in msg.content if b.type == 'text')
+            for v in json.loads(text)['verdicts']:
+                if 1 <= v['n'] <= len(batch):
+                    key = batch[v['n'] - 1]['title'].strip()
+                    verdicts[key] = _llm_cache[key] = bool(v['send'])
+                    if not v['send']:
+                        logger.info(f"AI 차단: {key[:60]}")
+                        if len(AI_REJECTED) < 300:
+                            AI_REJECTED.append(key)
+            LLM_STATE.update(ok=True, error='')
     except Exception as e:
-        logger.error(f"LLM 필터 오류: {e}")
-        return True  # 오류 시 통과 (안전 방향)
+        # 남은 묶음을 같은 오류로 계속 두드리지 않고 멈춘다. 판정 못 한 기사는 엄격 규칙으로 간다.
+        logger.error(f"AI 판정 오류: {type(e).__name__}: {e}")
+        LLM_STATE.update(ok=False, error=f"{type(e).__name__}: {str(e)[:200]}")
+    return verdicts
+
 
 # 네이버 뉴스 검색 API 설정
 NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')
 NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')
 NAVER_API_URL = 'https://openapi.naver.com/v1/search/news.json'
+# 키가 없으면 네이버 수집은 조용히 건너뛴다 — main.py가 이 값을 읽어 관리자에게 알린다
+NAVER_ENABLED = bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET)
 
 # 네이버 API로 검색할 쿼리 목록 (RSS 커버리지 보완용)
 NAVER_SEARCH_QUERIES = [
@@ -379,20 +390,29 @@ KEYWORDS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────
-# 필터링 설계 원칙 (v2: 화이트리스트 우선 방식)
+# 수집 원칙 (v7)
 #
-# 기존 방식(블랙리스트 단독)의 문제:
-#   → 홍보성 패턴은 무한히 변형되므로, 새 패턴이 나올 때마다 수동 추가 필요
+# 목적: 금융부 기자가 취재·발제에 쓸 금융권 뉴스를 받는다.
+#       보도자료를 옮긴 기사, 행사·동정·사회공헌·상품 홍보, 자잘한 소식은 받지 않는다.
 #
-# 개선 방식:
-#   1단계: 농협 관련 기사인지 확인 (기존 유지)
-#   2단계: 화이트리스트 — 영양가 있는 키워드가 하나라도 있으면 즉시 통과
-#   3단계: 구조적 홍보성 패턴 차단 (포토/행사/지역활동 등)
-#   4단계: 기존 블랙리스트 (보완용)
+# 1. 범위(규칙)      제목에 추적 대상(금융사·당국·정책 토픽·경영진)이 있어야 후보가 된다.  → KEYWORDS, EXEC_NAMES
+# 2. 명백한 것만 규칙으로 버린다
+#      형식: 포토·사진 설명·인사 묶음·부고·시황표·블로그 재게시·차단 매체
+#      홍보: 행사·수상·기부·협약·출시처럼 단어 자체가 홍보인 것             → STRUCTURAL_PROMO_PATTERNS, PROMO_KEYWORDS
+#      1차산업: 농협·수협의 농촌·어촌·재해 활동                              → PRIMARY_INDUSTRY_TOPICS
+# 3. 남은 후보는 전부 AI가 판정한다                                          → JUDGE_SYSTEM
+#      "보도자료성인가"는 단어가 아니라 뜻으로 가려야 한다. 매체가 어디든 면제하지 않는다.
+# 4. AI가 고장 나면 조용히 전부 통과시키지 않는다
+#      [단독]이거나 허용어(WHITELIST_KEYWORDS)가 있는 기사만 보내고, 관리자에게 알린다.
 #
-# 핵심: "막을 것"을 정의하는 대신 "통과시킬 것"을 먼저 정의한다.
+# 금지어를 넣을 때 지킬 것
+#   - '박차'·'정조준'·'봐야' 같은 수사 표현, 'ELS'·'협약'처럼 실제 뉴스에도 쓰이는 말은 넣지 않는다.
+#     (과거 'ELS'가 홍콩 ELS 과징금 기사를, '% 하락'이 실적 기사를 통째로 막았다.)
+#   - 새는 기사가 보이면 금지어를 늘리기 전에 JUDGE_SYSTEM의 기준 문장을 먼저 고친다.
+#   - 부분 문자열 일치에 주의한다 ('어가'⊂'들어가', '검사'⊂'신체검사', '행장'⊂'부행장').
 # ─────────────────────────────────────────────────────────────────
 
+# 허용어 — AI 판정을 쓸 수 없을 때만 쓰는 보수적 통과 기준 (평소에는 통과 여부를 정하지 않는다)
 # 화이트리스트 — 이 중 하나라도 포함되면 영양가 있는 기사로 즉시 통과
 # ⚠️ 계열사 명칭 포함 단어 추가 금지 (예: '손해', '생명')
 WHITELIST_KEYWORDS = [
@@ -428,7 +448,8 @@ WHITELIST_KEYWORDS = [
     # 금융 피해 — '피해' 대신 구체적인 금융 피해 표현만 허용
     '금융피해', '투자 피해', '대출 피해', '보험 피해',
     # 인사·조직 (조합장·감사 제거 — 지역 행사·경로 기사 오탐 방지)
-    '행장', '중앙회장', '대표이사', '취임', '선임', '연임', '해임', '사임', '사퇴',
+    # ('행장'·'중앙회장' 같은 직함은 넣지 않는다 — 직함만으로는 동정 기사와 구분되지 않는다)
+    '대표이사', '취임', '선임', '연임', '해임', '사임', '사퇴', '인선', '내정', '후보 추천',
     '임원', '이사회', '주주총회',
     # 회장 인사 (협단체·금융지주 회장 선출·교체 등 — 2026-05-23 누락 사례 반영)
     '신임 회장', '차기 회장', '회장 선출', '회장 후보', '회장 인선', '회장직',
@@ -444,23 +465,8 @@ WHITELIST_KEYWORDS = [
     '유예 종료', '규제 완화', '규제 강화', '규제 시행',
     # 농협 개혁 핵심 이슈
     '직선제', '철회', '번복', '오락가락',
-    # 주요 경영진 실명 — 이름이 기사 제목에 등장하면 주목 가치 있음
-    '강호동', '박서홍', '이찬우', '강태영',     # 농협
-    '노동진', '신학기',                         # 수협
-    # 8대 금융지주 회장 + 산하 시중은행장·인터넷뱅크·카드 사장
-    '양종희', '진옥동', '함영주', '임종룡',     # 5대 지주 (KB·신한·하나·우리)
-    '빈대인', '김기홍', '황병우',               # 지방 3대 지주 (BNK·JB·iM)
-    '이환주', '정상혁', '이호성', '정진완', '김성태',  # 5대 시중은행장
-    '윤호영', '최우형', '이은미',               # 인터넷뱅크 3사
-    '강정훈',                                    # iM뱅크
-    # 지방은행 행장 (5)
-    '방성빈', '예경탁', '정일선', '고병일', '박춘원', '백종일', '이희수',
-    # 카드 7사 사장
-    '박창훈', '김재관', '김이태', '정태영', '정상호', '진성원', '성영수', '김영우',
-    # 생명보험 5사 대표
-    '홍원학', '여승주', '신창재', '천상영', '정문철',
-    # 손해보험 5사 + 메리츠금융지주
-    '이문화', '정종표', '이석현', '구본욱', '김중현', '김용범'
+    # (경영진 실명은 여기 두지 않는다 — 이름만으로 통과하면 동정·사진 기사가 그대로 나간다.
+    #  실명 기사 중 뉴스는 연임·사퇴·의혹·실적 같은 다른 허용어에 함께 걸린다.)
     # 수협 핵심 사업 영역 (어업 정책·수산금융)
     '수산정책', '수산자금', '수산금융', '어업인 대출', '어선원',
     # 감사 — 단독 사용 시 '감사의 마음' 등 오탐. 구체적인 표현만 허용
@@ -492,7 +498,6 @@ STRUCTURAL_PROMO_PATTERNS = [
     '적금 최고금리',                            # 특판 적금 고금리 PR (법정최고금리·잔액동향은 미차단)
     '오픈이노베이션',                           # 스타트업 협업 PR (토스뱅크)
     '감사역량',                                 # 감사 결의·역량강화 PR (전남농협)
-    '박차',                                     # 비전 클리셰 (카카오뱅크 플랫폼 박차)
     '수익률 1위', '점유율 제고',                # 랭킹·점유율 마케팅 (우리은행 DC 1위)
     '고삐 죈다',                                # 경영진 행보 클리셰 (롯데카드 정상호)
     '개소',                                     # 창구·센터·지점 개소 (제주남원농협 동행창구)
@@ -535,7 +540,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     # 포토·영상·동정 기사 (시각 자료 중심·인물 공지)
     '[포토]', '[포토뉴스]', '[영상]', '[동정]',
     '[한 컷]', '[한컷]', '[현장]', '[사진]', '[화보]',
-    '[그래픽]', '[인포그래픽]', '[데이터]', '[숫자로 보는]',
+    '[그래픽]', '[인포그래픽]', '[데이터]', '[숫자로 보는]', '[표]',
     # 행사 동사 조합 (지역명 + 행사)
     '행사 실시', '행사 개최', '행사를 개최', '행사를 실시',
     '발대식', '발대', '출범식', '창립총회', '기념식',
@@ -578,7 +583,7 @@ STRUCTURAL_PROMO_PATTERNS = [
     '야광반사판', '농기계 안전', '안전 교육', '사고예방용',
     # 농가 피해·지원 활동 (저온피해, 가뭄 등 자연재해 대응 공지)
     '저온피해', '저온피해 예방', '저온피해 극복', '저온 피해',
-    '가뭄', '냉해', '병해충', '고온피해',
+    '냉해', '병해충', '고온피해',
     # 어가 피해·수산 자연재해 대응 (적조, 양식장 피해 등)
     '적조 피해', '양식장 피해', '어가 피해', '피해어가', '어업피해', '어업 피해',
     # 인물 동정 (현장 방문·점검)
@@ -683,8 +688,6 @@ STRUCTURAL_PROMO_PATTERNS = [
     '생활밀착 금융',
     # 업계 순위·최고 홍보 (실적 비교성 '업계 최고 수준'은 통과시키기 위해 PR 한정 표현만)
     '업계 최고로 선정', '업계 최고로 평가', '업계 최고 평가', '업계 최고 인정',
-    # 연합회장 인사 (과수농협 등 비금융 조합 연합회)
-    '연합회장',
     # 피해기업 지원 협력 (MOU 변형 — '협력' 단어로 우회)
     '피해기업 지원',
     # 전기차·친환경차 관련 (금융과 무관한 홍보)
@@ -743,21 +746,21 @@ PROMO_KEYWORDS = [
     '출시', '론칭', '새로 선보', '새롭게 선보', '신상품', '신규 출시',
     '지점 신설', '센터 신설', '영업점 신설', '점포 신설', '출시·신설', '특약 신설', '신규 도입',
     # 지수연동·구조화 상품 홍보 (ELD, ELS 등)
-    '지수연동예금', 'ELD', 'ELS', '원금 지키며', '원금보장',
+    '지수연동예금', '원금 지키며', '원금보장',
     # 마케팅·이벤트
     '이벤트', '캠페인', '프로모션', '할인', '경품',
     # 협약·제휴 ('협약' 단독 포함 — "기술검증 협약", "보안 강화 협약" 등 변형 차단)
-    'MOU', '업무협약', '업무협', '협약 체결', '협약', '동맹 체결', '맞손',
+    'MOU', '업무협약', '업무협', '동맹 체결', '맞손',
     # 수상·인증·순위 홍보
-    '수상', '최우수상', '우수상', '시상식', '시상', '인증 획득', 'AWARDS', '어워즈',
+    '최우수상', '우수상', '시상식', '시상', '인증 획득', 'AWARDS', '어워즈',
     '조합장상', '○○상', '우수 선정', '베스트 선정', '1위 선정', '대상 선정', '명가 선정', '선정 영예', '수상 기업', '수상 지점',
     '연도대상', '○○대상', '관왕', '최상위권', '전국 1위', '전국 2위', '전국 3위',
     '그룹 1위', '그룹 2위', '그룹 3위', '지역 1위', '지역 2위',
     'CEO상', 'CEO대상', '베스트CEO', '베스트-CEO',
     # 홍보성 클리셰 표현
-    '눈길', '화제',
+    '눈길',
     # 인물 탐방·칼럼 시리즈
-    '파수꾼', '현장의 파수꾼', '사람들', '인물탐방', '인물 탐방',
+    '파수꾼', '현장의 파수꾼', '인물탐방', '인물 탐방',
     # 사회공헌·봉사
     '기부', '봉사', '사회공헌', 'CSR', '나눔', '후원', '일손돕기', '일손 돕기', '장학금',
     # 표창·감사
@@ -771,7 +774,7 @@ PROMO_KEYWORDS = [
     # 정부 바우처·지원 사업
     '바우처',
     # ESG·사회공헌 홍보
-    'ESG', '지분투자', '지분 투자',
+    'ESG',
     # 마케팅 이벤트성 금리 (야구 승부예측 우대금리 등)
     '우대금리', '승부예측', '승부 예측', '쏠쏠',
     # 홍보성 선제 대응 클리셰
@@ -808,7 +811,7 @@ PROMO_KEYWORDS = [
     'AGCIA',  # 아시아 보증보험 협회 — 행사성 기사 양산
     # 증시 마감·지수 등락 (속보성 보도, 본질적 내용 없음)
     '코스피 마감', '코스닥 마감', '지수 마감', '코스피 종가', '코스닥 종가',
-    '% 급등', '% 하락', '% 상승', '%급등 마감', '%하락 마감',
+    '%급등 마감', '%하락 마감',
     # 농업 인프라·축산 행사 PR (2026-05-25 aflnews/경북농협 사례)
     '스마트팜', '한우경진대회', '한우 경진대회', '한우대회',
     '경진대회', '품평회', '축산대회',
@@ -844,7 +847,7 @@ PROMO_KEYWORDS = [
     '자립 돕는', '일자리 확대',
     # 행장·임원 현장 방문 동정 (강태영 농협은행장 '현장이 답이다' 사례)
     '현장이 답이다', '현장이답이다', '소통 통해', '동반자 역할',
-    '간담회', '간담회 개최', '간담회를 개최',
+    '간담회 개최', '간담회를 개최',
     # 스타트업 방문·육성 (NH농협은행장 에이오팜 방문 사례)
     '스타트업 육성', '스타트업 방문', '농업 혁신', '에이오팜',
     'AI 선별기', 'AI 농업', '농업 스타트업',
@@ -872,13 +875,13 @@ PROMO_KEYWORDS = [
     '시스템 운영 시작', '컴플라이언스 시스템',
     # 사회공헌 AI 반려로봇·독거노인 (2026-06-15 새마을금고 반려로봇 200대)
     '독거노인', '독거 노인', 'AI 반려로봇', '반려로봇 지원', '반려로봇',
-    '대 지원', '대 무료 제공', '대 기증',
+    '대 무료 제공', '대 기증',
     # 묶음 동향·오늘의 시리즈 (2026-06-16)
     '[금융계 동향]', '[금융 동향]', '[은행 동향]', '[보험 동향]', '[카드 동향]',
     '[오늘의 은행]', '[오늘의 보험]', '[오늘의 카드]', '[오늘의 금융]',
     '[특징주]', '[특징종목]',
     # 일반 정보 안내문 (2026-06-16 카드 혜택 따져야 / 보험계약 해지까지 가능 등)
-    '따져야', '챙겨야', '봐야', '해지까지 가능', '계약 해지까지',
+    '따져야', '챙겨야', '해지까지 가능', '계약 해지까지',
     '고지의무 위반', '위반, 보험계약',
     '하세요', '신청하세요', '삭제하세요', '신고하세요',
     '신고로 신속', '신속 삭제', '신상박제',
@@ -894,7 +897,7 @@ PROMO_KEYWORDS = [
     # 논문 공모·공모전 PR (2026-06-16 새마을금고 논문 공모)
     '논문 공모', '공모전 개최', '공모전 시행', '지속가능성 모색', '연구 공모',
     # 해외 진출 PR (2026-06-16 카카오뱅크 몽골 정조준)
-    '정조준', '시장 정조준', '협력 채널 구축', '협력 채널',
+    '시장 정조준', '협력 채널 구축', '협력 채널',
     '해외 시장 진출 가속', '해외 진출 가속',
     # 지자체 보험 가입 독려 (2026-06-16 강원도 우박 피해 보험)
     '보험 가입 독려', '가입 독려', '가입 권유',
@@ -1069,6 +1072,28 @@ RSS_FEEDS = [
     "https://www.asiae.co.kr/rss/economy.htm",
 ]
 
+# 구글 뉴스 검색 피드는 한 번에 100건까지만, 최신순이 아니라 관련도순으로 준다.
+# 시간 조건이 없으면 몇 달 전 기사가 자리를 차지해 새 기사가 빠진다
+# (2026-11 실측: '"[단독]" 은행' 피드 63건 중 최근 7일 기사는 10건뿐).
+# → 모든 검색 피드에 최근 1일 조건을 붙이고, 하루 100건을 넘기는 넓은 검색어는 최근 1시간 창으로 한 번 더 읽는다.
+_GOOGLE_SEARCH = "https://news.google.com/rss/search?q={}&hl=ko&gl=KR&ceid=KR:ko"
+HOURLY_QUERIES = [
+    '%22%5B단독%5D%22',   # 업권을 가리지 않고 모든 [단독] — 범위는 제목 규칙이 가른다
+    '농협', '수협', '은행', '금융지주', '보험', '카드사', '저축은행',
+    '금융감독원', '금융위원회',
+]
+
+
+def _feed_urls() -> list:
+    urls = []
+    for url in RSS_FEEDS:
+        if 'news.google.com/rss/search' in url and 'when:' not in url:
+            url = url.replace('&hl=', '+when:1d&hl=', 1)
+        urls.append(url)
+    urls += [_GOOGLE_SEARCH.format(q + '+when:1h') for q in HOURLY_QUERIES]
+    return urls
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SEEN_FILE = os.path.join(BASE_DIR, 'seen_articles.json')
 SEEN_TITLES_FILE = os.path.join(BASE_DIR, 'seen_titles.json')
@@ -1088,14 +1113,17 @@ def save_seen(seen):
 
 
 def load_seen_titles() -> list:
-    if os.path.exists(SEEN_TITLES_FILE):
-        with open(SEEN_TITLES_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+    """보낸 기사 제목과 보낸 시각의 목록 [[제목, 시각], ...]."""
+    if not os.path.exists(SEEN_TITLES_FILE):
+        return []
+    with open(SEEN_TITLES_FILE, 'r', encoding='utf-8') as f:
+        raw = json.load(f)
+    now = time.time()
+    # 예전 형식(제목 문자열만)은 방금 보낸 것으로 간주해 이어 쓴다
+    return [[r, now] if isinstance(r, str) else r for r in raw]
 
 
 def save_seen_titles(titles: list):
-    # 2026-06-15: 100→500 확장 (강호동 뇌물 의혹 등 옛 기사 RSS 재발송 차단)
     with open(SEEN_TITLES_FILE, 'w', encoding='utf-8') as f:
         json.dump(titles[-500:], f, ensure_ascii=False)
 
@@ -1124,25 +1152,44 @@ _AGENCY_NAMES = ['금감원', '금융감독원', '금융위', '금융위원회',
                   '한국은행', '한은', '금통위', '예금보험공사', '예보']
 
 
-def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> bool:
-    """핵심 키워드 N개 이상 겹치면 유사 기사로 판단.
-    부분 문자열 매칭 — 예: '농협은행장' ↔ 'NH농협은행장'
-    완전 일치는 즉시 차단.
-    당국 보도자료(금감원·금융위 등)는 변형 발표가 많아 2개만 겹쳐도 dedup.
+DEDUP_WINDOW_SEC = 72 * 3600
+_BREAKING_TAGS = ('[단독]', '[단독보도]', '[속보]')
+# 아직 일어나지 않은 일을 다루는 전망 기사의 표지
+_PREVIEW_WORDS = ('유력', '촉각', '무게', '전망', '임박', '가능성', '변수', '주목', '수순', '관측',
+                  '기대감', '갈림길', '하마평', '윤곽', '예고', '될까', '할까', '레이스')
+
+
+def _is_preview(title: str) -> bool:
+    return any(w in title for w in _PREVIEW_WORDS)
+
+
+def _is_similar_title(title: str, recent: list, now: float = None) -> bool:
+    """이미 보낸 기사와 같은 기사인지 판단한다. recent = [[제목, 보낸 시각], ...]
+
+    같은 뉴스를 여러 매체가 받아 쓴 것은 거르되, 같은 사안의 '새 전개'는 거르지 않는다.
+    예전에는 단어 3개만 겹치면 며칠 전 기사와도 중복으로 봤다. 그래서 '정진완 우리은행장 연임 유력'
+    전망 기사들 때문에 '[단독] 정진완 우리은행장 1년 연임…자추위 다수 찬성'이 중복으로 지워졌다.
+
+    - 제목이 완전히 같으면 중복
+    - 그 밖에는 최근 72시간 안에 보낸 기사하고만 비교한다
+    - 겹치는 단어가 3개 이상(당국 발표는 2개 이상)이면 중복. 단,
+        · 앞선 기사가 전망 기사이고 새 기사는 아니면 중복이 아니다 (전망은 결과를 막지 못한다)
+        · [단독]·[속보]는 새 사실이므로 단어의 80% 이상이 겹칠 때만(사실상 같은 제목일 때만) 중복이다
     """
+    now = time.time() if now is None else now
     title_clean = _normalize_title(title)
-    # 완전 일치 제목 즉시 차단
-    for prev in recent_titles:
-        if _normalize_title(prev) == title_clean:
-            logger.debug(f"완전 일치 중복 차단: '{title[:30]}'")
-            return True
     words_new = _extract_key_words(title_clean)
-    if len(words_new) < 2:
-        return False
-    # 새 제목에 당국명이 포함됐는지 미리 계산 (어떤 별칭이라도)
+    breaking = any(tag in title for tag in _BREAKING_TAGS)
+    new_is_preview = _is_preview(title_clean)
     new_has_agency = any(a in title_clean for a in _AGENCY_NAMES)
-    for prev in recent_titles:
+    for prev, sent_at in recent:
         prev_clean = _normalize_title(prev)
+        if prev_clean == title_clean:
+            return True
+        if now - sent_at > DEDUP_WINDOW_SEC or len(words_new) < 2:
+            continue
+        if _is_preview(prev_clean) and not new_is_preview:
+            continue
         words_prev = _extract_key_words(prev_clean)
         matched_prev = set()
         count = 0
@@ -1152,13 +1199,14 @@ def _is_similar_title(title: str, recent_titles: list, min_matches: int = 3) -> 
                     count += 1
                     matched_prev.add(wp)
                     break
-        # 양쪽 모두 어떤 당국명이라도 포함하면 임계값 완화 (별칭 달라도 OK)
-        # 예: '한국은행' ↔ '한은' (substring 매치 안 되지만 같은 기관)
-        threshold = min_matches
-        if new_has_agency and any(a in prev_clean for a in _AGENCY_NAMES):
-            threshold = 2
-        if count >= threshold:
-            logger.debug(f"유사 기사 차단(threshold={threshold}): '{title[:30]}' ↔ '{prev[:30]}'")
+        if breaking:
+            is_dup = count >= 3 and count / max(1, min(len(words_new), len(words_prev))) >= 0.8
+        else:
+            # 당국 발표는 매체마다 제목이 크게 달라 2개만 겹쳐도 같은 발표로 본다
+            both_agency = new_has_agency and any(a in prev_clean for a in _AGENCY_NAMES)
+            is_dup = count >= (2 if both_agency else 3)
+        if is_dup:
+            logger.debug(f"중복 차단({count}개): '{title[:30]}' ↔ '{prev[:30]}'")
             return True
     return False
 
@@ -1179,10 +1227,10 @@ CLICKBAIT_PRODUCT_HINTS = [
 # 제목에 아래 토픽이 있고 금융 실체 단어(FINANCIAL_SUBSTANCE_TERMS)가 전혀 없으면 차단.
 PRIMARY_INDUSTRY_TOPICS = [
     # 재해·기상
-    '폭염', '고수온', '태풍', '한파', '가뭄', '호우', '폭우', '냉해', '적조',
-    '해일', '산불', '장마', '혹서', '혹한', '재해', '재난', '풍수해',
+    '폭염', '고수온', '호우', '폭우', '냉해', '적조',
+    '해일', '산불', '장마', '재해', '재난', '풍수해',
     # 농수축산 활동·현장
-    '양식', '어가', '어촌', '어획', '양어', '종묘', '치어',
+    '양식', '어촌', '어획', '양어', '종묘',
     '농가', '농촌', '영농', '모내기', '모심기', '수확', '파종', '출하', '수매',
     '작황', '일손', '축산', '한우', '한돈', '수산물', '농산물', '농수산물',
     '축제', '경진대회', '품평회', '직거래장터',
@@ -1201,59 +1249,113 @@ FINANCIAL_SUBSTANCE_TERMS = [
 ]
 
 
-def is_relevant(title, summary=''):
-    text = title + ' ' + summary
-    # 1단계: 제목에 키워드가 있어야 통과
-    # 예외 1: 지자체 '금고' 단독 — 본문에 농협 등 있으면 통과
-    # 예외 2: 제목이 클릭베이트('이 펀드 뭐길래' 등)라 금융상품어만 있고 회사명 없으면
-    #         본문 KEYWORDS로 fallback (서울경제 '국민성장펀드' 첫날 완판 등)
-    title_has_kw = any(kw in title for kw in KEYWORDS)
-    has_standalone_gumgo = '금고' in title and '새마을금고' not in title and '새마을' not in title
-    has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
-    summary_has_kw = any(kw in summary for kw in KEYWORDS)
-    is_clickbait_fallback = (not title_has_kw) and (has_standalone_gumgo or has_product_hint) and summary_has_kw
-    # v6.11: [단독] 요약-fallback 철회 — 비금융 단독(한컴·케이블카 등)이 본문 금융단어로
-    #         새던 구멍 차단. 금융 단독은 제목에 금융 키워드가 있어 정상 통과됨.
-    has_scoop_tag = '[단독]' in title or '[단독보도]' in title
-    is_scoop_fallback = False
+# 단순 포함 검사로는 실제 뉴스까지 막는 금지어 — 예외를 붙여 정규식으로 검사한다
+PROMO_REGEXES = [re.compile(p) for p in (
+    r'수상(?!한|쩍)',                           # 수상 홍보 ('수상한 거래'는 뉴스)
+    r'(?<!자율)(?<!바젤)(?<!단체)(?<!임금)협약',  # MOU류 ('자율협약'·'단체협약'은 뉴스)
+    r'(?<!은행)연합회장',                       # 품목조합 연합회장 인사 ('은행연합회장'은 뉴스)
+)]
+# '어가'는 '들어가·넘어가'에 걸리므로 낱말로 쓰였을 때만 1차산업 토픽으로 본다
+_PRIMARY_RE = re.compile(r'(?<![가-힣])어가')
 
-    # v6.8: 1단계 통과 조건 = 제목 KEYWORDS / 클릭베이트·단독 본문fallback / 경영진 실명.
-    #        ([단독] 단독 순수우회는 v6.6→철회: 연예 등 비금융 단독 유입 차단)
-    if not title_has_kw and not is_clickbait_fallback and not is_scoop_fallback and not _has_exec_name(title):
-        return False
-    # 2단계: 구조적 홍보성 패턴 즉시 차단
-    if any(pattern in title for pattern in STRUCTURAL_PROMO_PATTERNS):
-        return False
-    # 3단계: 블랙리스트 차단
-    if any(kw in title for kw in PROMO_KEYWORDS):
-        return False
-    # 3.5단계: 1차산업·재해 토픽 차단 (v6, v6.6 순서이동) — [단독]보다 먼저 적용.
-    # 농협·수협 이중정체성 폭염·양식·재해 PR이 WHITELIST·인물명·[단독]으로 통과되던 구멍 차단.
-    if any(t in title for t in PRIMARY_INDUSTRY_TOPICS) and \
-       not any(t in title for t in FINANCIAL_SUBSTANCE_TERMS):
-        return False
-    # 4단계: [단독] 취재 기사 즉시 통과 (속보는 내용 없는 경우 多 → 제외)
-    # [속보]는 WHITELIST를 통과해야 — 진짜 속보(행장 사퇴/금리 인상 등)는 WHITELIST 매치됨
-    SCOOP_TAGS = ['[단독]', '[단독보도]']
-    if any(tag in title for tag in SCOOP_TAGS):
-        return True
-    # 4.6단계: 경영진 실명 기사 통과 (v6.8) — PR은 위 STRUCTURAL/PROMO/네거티브서 이미 차단,
-    #          순수 동정·릴레이는 STRUCTURAL이 잡음. 통과분은 LLM(EXEC 강제)이 최종 판단.
-    if _has_exec_name(title):
-        return True
-    # 5단계: 화이트리스트 — 제목에 영양가 있는 키워드가 있어야 통과
-    if any(kw in title for kw in WHITELIST_KEYWORDS):
-        return True
-    # 5-A) 클릭베이트 / 단독 fallback이면 본문 WHITELIST 또는 다수 KEYWORDS 매치도 허용
-    if is_clickbait_fallback or is_scoop_fallback:
-        if any(kw in summary for kw in WHITELIST_KEYWORDS):
-            return True
-        summary_kw_count = sum(1 for kw in KEYWORDS if kw in summary)
-        if summary_kw_count >= 2:
-            # 본문에 2개 이상 금융사·프로그램명 등장 = 진짜 금융 뉴스
-            return True
-    # 6단계: 기본 차단
-    return False
+# 허용어 검사 전에 지우는 합성어 — 허용어가 다른 낱말 속에 들어 있어 잘못 걸리는 경우
+_WHITELIST_NOISE = ['신체검사', '부행장', '수신료', '위원장상', '자산관리 서비스']
+
+_CAPTION_END = re.compile(r'(회장|행장|대표|대표이사|사장|원장|위원장|총재|총장|이사장)$')
+_CAPTION_PUNCT = re.compile(r'["\'“”‘’…·,:?!\[\]()]')
+
+
+def _is_photo_caption(title: str) -> bool:
+    """'박수치는 강호동 농협 회장'처럼 문장부호 없이 직함으로 끝나는 사진 설명 제목."""
+    t = _normalize_title(title)
+    return (bool(_CAPTION_END.search(t)) and not _CAPTION_PUNCT.search(t)
+            and not any(k in t for k in FINANCIAL_SUBSTANCE_TERMS))
+
+
+def screen(title, summary=''):
+    """규칙 단계. (후보인가, 엄격 기준도 통과하는가)를 돌려준다.
+
+    후보 = 수집 범위 안이고 명백한 홍보·형식 기사가 아닌 것. 최종 판정은 AI가 한다.
+    엄격 기준 = AI를 쓸 수 없을 때 대신 쓰는 보수적 기준([단독] 또는 허용어).
+    """
+    # 1) 범위 — 제목에 추적 대상이 있어야 한다.
+    #    예외: 제목이 '금고'·금융상품어뿐이어도 요약에 추적 대상이 있으면 범위로 본다.
+    title_has_kw = any(kw in title for kw in KEYWORDS)
+    has_standalone_gumgo = '금고' in title and '새마을' not in title
+    has_product_hint = any(p in title for p in CLICKBAIT_PRODUCT_HINTS)
+    summary_fallback = (not title_has_kw) and (has_standalone_gumgo or has_product_hint) \
+        and any(kw in summary for kw in KEYWORDS)
+    if not title_has_kw and not summary_fallback and not _has_exec_name(title):
+        return False, False
+
+    # 2) 명백한 형식·홍보 기사
+    if _is_photo_caption(title):
+        return False, False
+    if any(p in title for p in STRUCTURAL_PROMO_PATTERNS) or any(p in title for p in PROMO_KEYWORDS) \
+            or any(r.search(title) for r in PROMO_REGEXES):
+        return False, False
+
+    # 3) 농협·수협의 농촌·어촌·재해 활동 (금융 실체 단어가 함께 있으면 남긴다)
+    if (any(t in title for t in PRIMARY_INDUSTRY_TOPICS) or _PRIMARY_RE.search(title)) \
+            and not any(t in title for t in FINANCIAL_SUBSTANCE_TERMS):
+        return False, False
+
+    # 여기까지 오면 후보. 아래는 AI를 못 쓸 때의 엄격 기준.
+    if '[단독]' in title or '[단독보도]' in title:
+        return True, True
+    probe = title
+    for noise in _WHITELIST_NOISE:
+        probe = probe.replace(noise, ' ')
+    if any(kw in probe for kw in WHITELIST_KEYWORDS):
+        return True, True
+    if summary_fallback and (any(kw in summary for kw in WHITELIST_KEYWORDS)
+                             or sum(1 for kw in KEYWORDS if kw in summary) >= 2):
+        return True, True
+    return True, False
+
+
+def is_relevant(title, summary=''):
+    """AI 없이 규칙만으로 본 통과 여부 (엄격 기준). 점검 스크립트 호환용."""
+    return screen(title, summary)[1]
+
+
+def _consider(candidates: list, seen: set, seen_titles: list,
+              title: str, url: str, summary: str, source: str, published: str) -> None:
+    """기사 한 건을 규칙 단계에 태워, 남으면 AI 판정 대기열에 넣는다."""
+    title = html.unescape(title).strip()
+    if not title or not url:
+        return
+    if _is_blocked_source(url, source):
+        return
+    is_candidate, strict_ok = screen(title, summary)
+    if not is_candidate:
+        return
+    if get_article_id(url, title) in seen:
+        return
+    if _is_similar_title(title, seen_titles):
+        return
+    candidates.append({'title': title, 'url': url, 'summary': summary, 'published': published,
+                       'source': source, 'strict_ok': strict_ok})
+
+
+def _select(candidates: list, seen: set, seen_titles: list) -> list:
+    """AI 판정을 거쳐 보낼 기사를 고른다. AI가 판정하지 못한 기사는 엄격 기준을 따른다."""
+    verdicts = _llm_judge(candidates)
+    picked = []
+    for c in candidates:
+        send = verdicts.get(c['title'].strip())
+        if send is None:
+            send = c['strict_ok']
+        if not send:
+            continue
+        # 이번 수집분끼리의 중복은 판정 뒤에 거른다
+        # (판정 전에 거르면 탈락한 홍보 기사 때문에 같은 사안의 뉴스가 지워질 수 있다)
+        if _is_similar_title(c['title'], seen_titles):
+            continue
+        seen.add(get_article_id(c['url'], c['title']))
+        seen_titles.append([c['title'], time.time()])
+        picked.append({k: c[k] for k in ('title', 'url', 'summary', 'published', 'source')})
+    return picked
 
 
 def _strip_html(text: str) -> str:
@@ -1261,27 +1363,26 @@ def _strip_html(text: str) -> str:
     return re.sub(r'<[^>]+>', '', text).strip()
 
 
-def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
-    """네이버 뉴스 검색 API로 기사를 수집해 반환한다.
+def fetch_from_naver(candidates: list, seen: set, seen_titles: list, cutoff: datetime) -> None:
+    """네이버 뉴스 검색 API로 기사를 수집해 판정 대기열(candidates)에 넣는다.
 
     NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수가 없으면 조용히 건너뜀.
     RSS로 커버되지 않는 언론사(MTN 등)의 기사를 보완하는 용도.
     """
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.debug("네이버 API 키 미설정 — 건너뜀")
-        return []
+        return
 
     headers = {
         'X-Naver-Client-Id': NAVER_CLIENT_ID,
         'X-Naver-Client-Secret': NAVER_CLIENT_SECRET,
     }
-    articles = []
 
     for query in NAVER_SEARCH_QUERIES:
         try:
             params = {
                 'query': query,
-                'display': 20,   # 회당 최대 수집 건수
+                'display': 100,  # 회당 최대 수집 건수 (API 상한)
                 'sort': 'date',  # 최신순
             }
             resp = requests.get(NAVER_API_URL, headers=headers, params=params, timeout=10)
@@ -1307,58 +1408,21 @@ def fetch_from_naver(seen: set, seen_titles: list, cutoff: datetime) -> list:
                 else:
                     published = ''
 
-                if not title or not url:
-                    continue
-
-                # 차단 도메인 즉시 제외
-                if _is_blocked_source(url):
-                    continue
-
-                # 홍보성 필터 적용 (1단계 키워드 체크는 쿼리 자체가 이미 농협 한정이므로 생략 가능하나 일관성을 위해 유지)
-                if not is_relevant(title, summary):
-                    continue
-
-                # 비신뢰 출처 또는 경영진 실명 포함 기사는 LLM 검증
-                # (경영진 이름은 신뢰 출처라도 모내기·행사 등 PR 기사가 끼어들 수 있음)
-                needs_llm = (
-                    not _is_trusted_source(url)
-                    or _has_exec_name(title)
-                    or _is_clickbait_pass(title)
-                )
-                if needs_llm and not _llm_filter(title, summary):
-                    continue
-
-                article_id = get_article_id(url, title)
-                if article_id in seen:
-                    continue
-                if _is_similar_title(title, seen_titles):
-                    continue
-
-                seen.add(article_id)
-                seen_titles.append(title)
-                articles.append({
-                    'title': title,
-                    'url': url,
-                    'summary': summary,
-                    'published': published,
-                    'source': item.get('link', '').split('/')[2] if item.get('link') else '',
-                })
+                source = item.get('link', '').split('/')[2] if item.get('link') else ''
+                _consider(candidates, seen, seen_titles, title, url, summary, source, published)
 
         except requests.exceptions.RequestException as e:
             logger.error(f"네이버 API 수집 오류 [query={query}]: {e}")
-
-    logger.info(f"네이버 API — 새 기사 {len(articles)}건 수집")
-    return articles
 
 
 def fetch_new_articles():
     seen = load_seen()
     seen_titles = load_seen_titles()
-    new_articles = []
+    candidates = []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
     # ── 1. RSS 피드 수집 ─────────────────────────────────────────
-    for feed_url in RSS_FEEDS:
+    for feed_url in _feed_urls():
         try:
             feed = feedparser.parse(feed_url)
             for entry in feed.entries:
@@ -1392,54 +1456,22 @@ def fetch_new_articles():
                 elif hasattr(feed, 'feed') and hasattr(feed.feed, 'title'):
                     source = feed.feed.title
 
-                if not title or not url:
-                    continue
-
-                # 차단 도메인·소스 즉시 제외 (Google 뉴스 RSS 우회 방지용 source 이름 포함)
-                if _is_blocked_source(url, source):
-                    continue
-
-                if not is_relevant(title, summary):
-                    continue
-
-                # 비신뢰 출처 또는 경영진 실명 포함 기사는 LLM 검증
-                # (경영진 이름은 신뢰 출처라도 모내기·행사 등 PR 기사가 끼어들 수 있음)
-                needs_llm = (
-                    not _is_trusted_source(url)
-                    or _has_exec_name(title)
-                    or _is_clickbait_pass(title)
-                )
-                if needs_llm and not _llm_filter(title, summary):
-                    continue
-
-                article_id = get_article_id(url, title)
-                if article_id in seen:
-                    continue
-                if _is_similar_title(title, seen_titles):
-                    continue
-
-                seen.add(article_id)
-                seen_titles.append(title)
-                new_articles.append({
-                    'title': title,
-                    'url': url,
-                    'summary': summary,
-                    'published': published,
-                    'source': source,
-                })
+                _consider(candidates, seen, seen_titles, title, url, summary, source, published)
 
         except Exception as e:
             logger.error(f"피드 수집 오류 [{feed_url}]: {e}")
 
     # ── 2. 네이버 뉴스 검색 API 수집 (RSS 미커버 언론사 보완) ──────
-    naver_articles = fetch_from_naver(seen, seen_titles, cutoff)
-    new_articles.extend(naver_articles)
+    fetch_from_naver(candidates, seen, seen_titles, cutoff)
+
+    # ── 3. AI 판정 → 중복 제거 ───────────────────────────────────
+    new_articles = _select(candidates, seen, seen_titles)
 
     if new_articles:
         save_seen(seen)
         save_seen_titles(seen_titles)
 
-    logger.info(f"총 새 기사 {len(new_articles)}건 수집 (RSS + 네이버 API)")
+    logger.info(f"후보 {len(candidates)}건 → 발송 {len(new_articles)}건 (AI 판정 상태: {LLM_STATE['ok']})")
     return new_articles
 
 
