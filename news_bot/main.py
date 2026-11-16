@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
-from collector import fetch_new_articles, format_article, LLM_STATE, NAVER_ENABLED, AI_REJECTED
+from collector import fetch_new_articles, format_article, LLM_STATE, NAVER_ENABLED, NAVER_STATE, AI_REJECTED
 
 KST = ZoneInfo('Asia/Seoul')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -85,7 +85,15 @@ def _llm_status_text() -> str:
     return '정상' if LLM_STATE['ok'] else f"고장 — {LLM_STATE['error']}"
 
 
-_reported = {'llm': None, 'naver': False}
+def _naver_status_text() -> str:
+    if not NAVER_ENABLED:
+        return '꺼짐 (키 없음)'
+    if NAVER_STATE['ok'] is None:
+        return '켜짐 (아직 호출 전)'
+    return '정상' if NAVER_STATE['ok'] else f"실패 — {NAVER_STATE['error']}"
+
+
+_reported = {'llm': None, 'naver': False, 'naver_ok': None}
 
 
 async def report_filter_state(context):
@@ -98,6 +106,11 @@ async def report_filter_state(context):
     if not NAVER_ENABLED and not _reported['naver']:
         _reported['naver'] = True
         notes.append("ℹ️ 네이버 수집이 꺼져 있습니다 (NAVER_CLIENT_ID·SECRET 없음). 구글·언론사 피드만 읽습니다.")
+    naver_ok = NAVER_STATE['ok']
+    if naver_ok is not None and naver_ok != _reported['naver_ok']:
+        _reported['naver_ok'] = naver_ok
+        notes.append("✅ 네이버 수집이 정상 작동합니다." if naver_ok else
+                     "⚠️ 네이버 수집이 실패하고 있습니다. 구글·언론사 피드만 읽습니다.\n" + NAVER_STATE['error'])
     ok = LLM_STATE['ok']
     if ok is not None and ok != _reported['llm']:
         _reported['llm'] = ok
@@ -117,7 +130,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📢 뉴스 발송 채널: <code>{BROADCAST_CHAT_ID}</code>\n"
         f"🛠 관리자 채팅: <code>{ADMIN_CHAT_ID}</code>\n"
         f"🤖 AI 판정: {_llm_status_text()}\n"
-        f"🔎 네이버 수집: {'켜짐' if NAVER_ENABLED else '꺼짐 (키 없음)'}",
+        f"🔎 네이버 수집: {_naver_status_text()}",
         parse_mode='HTML'
     )
 

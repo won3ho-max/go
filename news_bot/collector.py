@@ -287,6 +287,8 @@ NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')
 NAVER_API_URL = 'https://openapi.naver.com/v1/search/news.json'
 # 키가 없으면 네이버 수집은 조용히 건너뛴다 — main.py가 이 값을 읽어 관리자에게 알린다
 NAVER_ENABLED = bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET)
+# 네이버 수집 상태 — 키가 틀리면 요청마다 401이 나는데, 로그에만 남기면 아무도 모른다
+NAVER_STATE = {'ok': None, 'error': ''}  # ok: True 정상 / False 실패 / None 아직 호출 전
 
 # 네이버 API로 검색할 쿼리 목록 (RSS 커버리지 보완용)
 NAVER_SEARCH_QUERIES = [
@@ -1388,6 +1390,7 @@ def fetch_from_naver(candidates: list, seen: set, seen_titles: list, cutoff: dat
             resp = requests.get(NAVER_API_URL, headers=headers, params=params, timeout=10)
             resp.raise_for_status()
             items = resp.json().get('items', [])
+            NAVER_STATE.update(ok=True, error='')
 
             for item in items:
                 title = _strip_html(item.get('title', ''))
@@ -1413,6 +1416,8 @@ def fetch_from_naver(candidates: list, seen: set, seen_titles: list, cutoff: dat
 
         except requests.exceptions.RequestException as e:
             logger.error(f"네이버 API 수집 오류 [query={query}]: {e}")
+            NAVER_STATE.update(ok=False, error=f"{type(e).__name__}: {str(e)[:150]}")
+            break  # 같은 오류로 남은 검색어를 계속 두드리지 않는다
 
 
 def fetch_new_articles():
