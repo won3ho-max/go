@@ -28,5 +28,5 @@
 ## 운영
 - 15분마다 수집·발송. 22:00~06:00 수집분은 06:00에 일괄 발송. 15:00 하트비트(관리자 채팅).
 - 배포: `main` 브랜치에 `news_bot/**` 변경을 푸시하면 GitHub Actions(`deploy.yml`)가 서버에 복사하고 재시작한다. 푸시 전 `git pull --rebase origin main`.
-- 서버 `.env`는 배포 때마다 GitHub Secrets 값으로 새로 쓰인다. 지금 `deploy.yml`은 NAVER 키를 쓰지 않으므로 네이버 수집은 꺼져 있다(봇이 켜질 때 관리자에게 알린다).
+- 서버 `.env`는 배포 때마다 GitHub Secrets 값으로 새로 쓰인다. 네이버 수집은 Secrets에 `NAVER_CLIENT_ID`·`NAVER_CLIENT_SECRET`이 있을 때만 켜진다(없으면 봇이 켜질 때 관리자에게 알린다).
 - AI 판정 상태는 `/status`로 확인한다.
