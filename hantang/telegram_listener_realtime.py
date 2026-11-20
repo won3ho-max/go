@@ -2100,6 +2100,9 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
+    {"id": "20261120-log-misbuy", "op": "dispatch", "workflow": "listener_log.yml",
+     "inputs": {"pattern": "매수-|에코켐|오스코텍|티엘비", "lines": "80", "scan": "40000"},
+     "why": "김동환 에코켐·이광훈 오스코텍 오기록 원문·근거 확인"},
     {"id": "20261111-daily-test-alerts", "op": "dispatch", "workflow": "daily_report.yml",
      "inputs": {"test_mode": "true"},
      "why": "아침 알림(자동매도 예고·급등락) 추가 후 데일리 정상 동작 확인(개인 텔레그램)"},
