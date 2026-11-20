@@ -2125,6 +2125,9 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
     # 처리 완료: 20261120-log-misbuy (김동환·이광훈 오기록 원문 확인 — LLM이 지어낸 코드)
+    {"id": "20261120-daily-group-relabel", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "false"},
+     "why": "종목명 정정한 4분기 카드 단톡방 재발송(card_only로 4분기만, 아침 알림 생략)"},
     {"id": "20261120-kdh-nuriflex-relabel", "op": "relabel", "quarter": (26, 4),
      "person": "김동환", "old": "에코캡", "new": "누리플렉스", "rec": "2026-11-16",
      "why": "'”누리플렉스“' 추천을 LLM이 128540(에코캡)으로 오인식"},
