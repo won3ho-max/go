@@ -943,6 +943,24 @@ def _fuzzy_holding(text: str, holdings):
             f"보유 종목 근사 대조({n}/{L}자 일치)")
 
 
+def _grounded(text: str, nm: str, cd: str) -> bool:
+    """확정 후보(nm, cd)가 원문에 실제로 근거가 있나. 종목명이 원문에 있거나(오타 15%까지),
+    티커·코드가 원문에 그대로 적혀 있어야 한다. LLM이 지어낸 코드를 걸러내는 용도."""
+    t = text or ""
+    if cd and re.search(r"(?<![A-Z0-9])" + re.escape(cd.upper()) + r"(?![A-Z0-9])", t.upper()):
+        return True
+    core = _norm(_HEDGE_SUFFIX.sub("", nm or ""))   # _loose는 '엔'을 지워서(지엔씨→지씨) 쓰면 안 된다
+    if len(core) < 2:
+        return False
+    # 글자 사이 띄어쓰기·문장부호는 허용('S-OIL', 'KODEX WTI원유선물'), 앞뒤는 단어 경계여야 한다.
+    # '대덕전자' 글에 '대덕'(다른 회사)이 걸리지 않게. 뒤에 붙는 조사는 허용.
+    body = r"[\s\-·.&_/]*".join(re.escape(c) for c in core)
+    pat = (r"(?<![가-힣A-Za-z0-9])" + body +
+           r"(?![A-Za-z0-9])(?![가-힣])|(?<![가-힣A-Za-z0-9])" + body +
+           r"(?=(?:을|를|이|가|은|는|의|도|로|으로|에|와|과|랑)(?![가-힣]))")
+    return re.search(pat, t, re.I) is not None
+
+
 def resolve_stock(text: str, holdings=None, history=None):
     """종목 확정. 반환: (시트표기 문자열 or None, 판정근거 문자열)
 
@@ -1033,6 +1051,12 @@ def resolve_stock(text: str, holdings=None, history=None):
             continue
 
         nm, cd, is_kr = res
+        # LLM 후보는 원문에 근거가 있을 때만 쓴다. 2026-11-16 김동환 '”누리플렉스“'를 LLM이
+        # 128540(에코캡), 11-17 이광훈 '#티엘비'를 039200(오스코텍)으로 지어내 그대로 기록됐다.
+        if why.startswith("LLM") and not _grounded(text, nm, cd):
+            notes.append(f"{why}('{val}') → {nm}({cd}) 원문에 없음 → 미사용")
+            seen.discard(key)   # 같은 값을 원문 토큰 후보로는 다시 볼 수 있게
+            continue
         # 국내 상장사의 미국 ADR이면 국내 상장분으로 대체(스터디는 국내 상장 기준)
         if not is_kr and _is_adr(nm):
             dom, via = _domestic_for_adr(nm, cd)
@@ -2100,9 +2124,19 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
-    {"id": "20261120-log-misbuy", "op": "dispatch", "workflow": "listener_log.yml",
-     "inputs": {"pattern": "매수-|에코켐|오스코텍|티엘비", "lines": "80", "scan": "40000"},
-     "why": "김동환 에코켐·이광훈 오스코텍 오기록 원문·근거 확인"},
+    # 처리 완료: 20261120-log-misbuy (김동환·이광훈 오기록 원문 확인 — LLM이 지어낸 코드)
+    {"id": "20261120-kdh-nuriflex-relabel", "op": "relabel", "quarter": (26, 4),
+     "person": "김동환", "old": "에코캡", "new": "누리플렉스", "rec": "2026-11-16",
+     "why": "'”누리플렉스“' 추천을 LLM이 128540(에코캡)으로 오인식"},
+    {"id": "20261120-lkh-tlb-relabel", "op": "relabel", "quarter": (26, 4),
+     "person": "이광훈", "old": "오스코텍", "new": "티엘비", "rec": "2026-11-17",
+     "why": "'#티엘비' 추천을 LLM이 039200(오스코텍)으로 오인식"},
+    {"id": "20261120-daily-test-relabel", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "정정한 두 종목 기준가·현재가 재계산 + 카드 확인(개인 텔레그램)"},
+    {"id": "20261120-log-relabel", "op": "dispatch", "workflow": "listener_log.yml",
+     "inputs": {"pattern": "OPS", "lines": "12", "scan": "3000"},
+     "why": "정정 결과 확인"},
     {"id": "20261111-daily-test-alerts", "op": "dispatch", "workflow": "daily_report.yml",
      "inputs": {"test_mode": "true"},
      "why": "아침 알림(자동매도 예고·급등락) 추가 후 데일리 정상 동작 확인(개인 텔레그램)"},
@@ -2221,6 +2255,34 @@ def run_startup_ops(cache):
                         cache.refresh(ws)
                 msg = (f"🛠 [OPS 실현 정정] {oid}\n{okn}건 정정" +
                        (f", 건너뜀 {len(skip)}건: " + ", ".join(skip) if skip else ""))
+                notify_admin(msg)
+                log(msg.replace("\n", " | "))
+                done.add(oid)
+                OPS_DONE_FILE.write_text("\n".join(sorted(done)))
+                continue
+            if op.get("op") == "relabel":
+                # 활성 종목명 정정(오인식으로 다른 종목이 기록된 경우). 가드: 활성 칸에서
+                # 기존 종목·추천일이 맞는 행이 정확히 1건일 때만. J를 바꾸고 L·M을 비워
+                # 데일리가 새 종목 시세로 다시 채우게 한다(같은 push에 daily test_mode를 실어 보낸다).
+                ws = cache.tab(tuple(op["quarter"]))
+                vals = cache.values(ws, fresh=True)
+                person, old, new, rec = op["person"], op["old"], op["new"], op["rec"]
+                ob = _split_stock_label(old)[1]
+                blk = next(b for b in find_person_blocks(vals) if person in b["person"])
+                hits = []
+                for r in range(blk["row_start"], blk["row_end"] + 1):
+                    row = (vals[r - 1] + [""] * 21)[:21] if r - 1 < len(vals) else [""] * 21
+                    if row[9].strip() and _split_stock_label(row[9])[1] == ob and rec in row[10]:
+                        hits.append((r, row[9].strip()))
+                if len(hits) != 1:
+                    raise RuntimeError(f"{person} {old}({rec}) 활성 행 {len(hits)}건 — 정확히 1건이 아니라 쓰기 안 함")
+                jr, was = hits[0]
+                sheet_retry(lambda: ws.batch_update([
+                    {"range": f"J{jr}", "values": [[new]]},
+                    {"range": f"L{jr}:M{jr}", "values": [["", ""]]},
+                ], value_input_option="USER_ENTERED"), "종목명 정정")
+                cache.refresh(ws)
+                msg = f"✏️ [OPS 종목명 정정] {oid}\n[{ws.title}] {person} J{jr} '{was}' → '{new}' (추천일 {rec})"
                 notify_admin(msg)
                 log(msg.replace("\n", " | "))
                 done.add(oid)
