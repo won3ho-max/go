@@ -221,6 +221,83 @@ def _judge_line(n: int, item: dict) -> str:
     return f"{n}. {title}"
 
 
+DEDUP_SYSTEM = """당신은 금융 뉴스 텔레그램 채널에서 같은 뉴스가 두 번 나가지 않게 막는 담당이다.
+'이미 보낸 기사' 목록과 '새 기사' 목록이 주어진다. 새 기사마다, 이미 보낸 기사나 자기보다 번호가 앞선 새 기사와
+같은 뉴스인지(dup) 판정한다.
+
+같은 뉴스로 본다(dup=true):
+- 같은 발표·결정·사건을 매체만 바꿔, 또는 제목 표현만 바꿔 쓴 기사
+  (예: "정부, 증시안정펀드 가동 준비"와 "정부 '증안펀드' 즉시 가동 준비·공매도 3개월 특별감시"와
+   "금감원·거래소, 3개월간 불법 공매도 특별감시" — 같은 날 정부가 함께 발표한 대책이면 모두 같은 뉴스)
+- [속보]와 그 뒤에 나온 같은 내용의 정리 기사, (종합)·(2보) 기사
+- 줄임말·정식 명칭 차이(증안펀드=증권시장안정펀드, 자추위=자회사대표이사후보추천위원회)
+
+다른 뉴스로 본다(dup=false):
+- 같은 사안이라도 새로운 사실이 나온 경우: 전망·관측 기사 뒤의 확정 결과, 후속 결정, 새 수치, 반발·논란 같은 새 전개
+- 앞선 보도에 없던 내용을 처음 전하는 [단독]
+- 같은 회사·같은 주제지만 서로 다른 일을 다룬 기사"""
+
+_DEDUP_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'items': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {'n': {'type': 'integer'}, 'dup': {'type': 'boolean'}},
+                'required': ['n', 'dup'],
+                'additionalProperties': False,
+            },
+        },
+    },
+    'required': ['items'],
+    'additionalProperties': False,
+}
+DEDUP_BATCH = 40
+DEDUP_RECENT = 150   # 비교할 '이미 보낸 기사' 최대 수 (최근 24시간 안)
+
+
+def _llm_dedup(items: list, recent: list) -> list:
+    """items의 각 기사가 이미 보낸 기사(recent, 제목 목록) 또는 앞선 item과 같은 뉴스인지.
+
+    돌려주는 목록은 items와 같은 길이이고, 판정하지 못한 자리는 None이다(호출부가 규칙으로 대신 판단).
+    """
+    flags = [None] * len(items)
+    if not items or not ANTHROPIC_API_KEY:
+        return flags
+    sent = list(recent)[-DEDUP_RECENT:]
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        for start in range(0, len(items), DEDUP_BATCH):
+            batch = items[start:start + DEDUP_BATCH]
+            sent_block = '\n'.join(f"- {_normalize_title(t)}" for t in sent) or '(없음)'
+            new_block = '\n'.join(f"{n}. {_normalize_title(it['title'])}" for n, it in enumerate(batch, 1))
+            msg = client.messages.create(
+                model=LLM_MODEL,
+                max_tokens=2000,
+                system=DEDUP_SYSTEM,
+                messages=[{'role': 'user', 'content': f"이미 보낸 기사:\n{sent_block}\n\n새 기사:\n{new_block}"}],
+                extra_body={
+                    'thinking': {'type': 'disabled'},
+                    'output_config': {'effort': 'low', 'format': {'type': 'json_schema', 'schema': _DEDUP_SCHEMA}},
+                },
+            )
+            if msg.stop_reason == 'refusal':
+                continue
+            text = ''.join(b.text for b in msg.content if b.type == 'text')
+            for v in json.loads(text)['items']:
+                if 1 <= v['n'] <= len(batch):
+                    flags[start + v['n'] - 1] = bool(v['dup'])
+            # 다음 묶음은 이번 묶음에서 남은 기사까지 '이미 보낸 기사'로 본다
+            sent += [it['title'] for k, it in enumerate(batch) if flags[start + k] is False]
+            LLM_STATE.update(ok=True, error='')
+    except Exception as e:
+        logger.error(f"AI 중복 판정 오류: {type(e).__name__}: {e}")
+        LLM_STATE.update(ok=False, error=f"{type(e).__name__}: {str(e)[:200]}")
+    return flags
+
+
 def _llm_judge(items: list) -> dict:
     """제목 → 보낼지 여부(bool).
 
@@ -1155,7 +1232,10 @@ _AGENCY_NAMES = ['금감원', '금융감독원', '금융위', '금융위원회',
 
 
 DEDUP_WINDOW_SEC = 72 * 3600
-_BREAKING_TAGS = ('[단독]', '[단독보도]', '[속보]')
+# [단독]만 새 사실로 본다. [속보]는 같은 발표를 여러 매체가 동시에 내는 경우가 대부분이라 면제하지 않는다
+# (2026-11-22 '증안펀드 가동 준비' [속보] 5건이 모두 나간 사고).
+_BREAKING_TAGS = ('[단독]', '[단독보도]')
+_TAG_RE = re.compile(r'\[[^\]]*\]|\((?:종합|속보|1보|2보|상보|고침)[^)]*\)')
 # 아직 일어나지 않은 일을 다루는 전망 기사의 표지
 _PREVIEW_WORDS = ('유력', '촉각', '무게', '전망', '임박', '가능성', '변수', '주목', '수순', '관측',
                   '기대감', '갈림길', '하마평', '윤곽', '예고', '될까', '할까', '레이스')
@@ -1176,11 +1256,15 @@ def _is_similar_title(title: str, recent: list, now: float = None) -> bool:
     - 그 밖에는 최근 72시간 안에 보낸 기사하고만 비교한다
     - 겹치는 단어가 3개 이상(당국 발표는 2개 이상)이면 중복. 단,
         · 앞선 기사가 전망 기사이고 새 기사는 아니면 중복이 아니다 (전망은 결과를 막지 못한다)
-        · [단독]·[속보]는 새 사실이므로 단어의 80% 이상이 겹칠 때만(사실상 같은 제목일 때만) 중복이다
+        · [단독]은 새 사실이므로 단어의 80% 이상이 겹칠 때만(사실상 같은 제목일 때만) 중복이다
+    - [속보]·[단독] 같은 머리표는 단어 비교에서 뺀다 ('속보'라는 낱말이 겹친 것으로 세지 않도록)
+
+    AI 중복 판정(_llm_dedup)을 쓸 수 있으면 그쪽이 우선이고, 이 함수는 AI를 못 쓸 때와
+    수집 단계의 1차 거름에 쓴다.
     """
     now = time.time() if now is None else now
     title_clean = _normalize_title(title)
-    words_new = _extract_key_words(title_clean)
+    words_new = _extract_key_words(_TAG_RE.sub(' ', title_clean))
     breaking = any(tag in title for tag in _BREAKING_TAGS)
     new_is_preview = _is_preview(title_clean)
     new_has_agency = any(a in title_clean for a in _AGENCY_NAMES)
@@ -1192,7 +1276,7 @@ def _is_similar_title(title: str, recent: list, now: float = None) -> bool:
             continue
         if _is_preview(prev_clean) and not new_is_preview:
             continue
-        words_prev = _extract_key_words(prev_clean)
+        words_prev = _extract_key_words(_TAG_RE.sub(' ', prev_clean))
         matched_prev = set()
         count = 0
         for wn in words_new:
@@ -1321,12 +1405,37 @@ def is_relevant(title, summary=''):
     return screen(title, summary)[1]
 
 
+STALE_BREAKING_SEC = 3 * 3600
+
+
+def _published_ts(published: str):
+    """발행 시각 문자열(네이버 'YYYY-MM-DD HH:MM KST' 또는 RSS RFC 822) → epoch 초. 모르면 None."""
+    if not published:
+        return None
+    try:
+        if published.endswith('KST'):
+            kst = timezone(timedelta(hours=9))
+            return datetime.strptime(published, '%Y-%m-%d %H:%M KST').replace(tzinfo=kst).timestamp()
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(published)
+        if dt.tzinfo is None:   # '-0000' 표기는 시간대 없는 값으로 읽힌다 — UTC로 본다
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
 def _consider(candidates: list, seen: set, seen_titles: list,
               title: str, url: str, summary: str, source: str, published: str) -> None:
     """기사 한 건을 규칙 단계에 태워, 남으면 AI 판정 대기열에 넣는다."""
     title = html.unescape(title).strip()
     if not title or not url:
         return
+    # 몇 시간 지나 들어온 [속보]는 이미 정리 기사로 대체됐다 (11-22 오전 9시대 속보가 저녁 6시에 나간 사례)
+    if '[속보]' in title:
+        ts = _published_ts(published)
+        if ts is not None and time.time() - ts > STALE_BREAKING_SEC:
+            return
     if _is_blocked_source(url, source):
         return
     is_candidate, strict_ok = screen(title, summary)
@@ -1341,18 +1450,30 @@ def _consider(candidates: list, seen: set, seen_titles: list,
 
 
 def _select(candidates: list, seen: set, seen_titles: list) -> list:
-    """AI 판정을 거쳐 보낼 기사를 고른다. AI가 판정하지 못한 기사는 엄격 기준을 따른다."""
+    """AI 판정을 거쳐 보낼 기사를 고르고, 같은 뉴스는 하나만 남긴다.
+
+    AI가 판정하지 못한 기사는 엄격 기준을, AI가 중복 여부를 판정하지 못한 기사는 규칙 중복 판정을 따른다.
+    """
     verdicts = _llm_judge(candidates)
-    picked = []
+    passing = []
     for c in candidates:
         send = verdicts.get(c['title'].strip())
         if send is None:
             send = c['strict_ok']
-        if not send:
-            continue
-        # 이번 수집분끼리의 중복은 판정 뒤에 거른다
-        # (판정 전에 거르면 탈락한 홍보 기사 때문에 같은 사안의 뉴스가 지워질 수 있다)
-        if _is_similar_title(c['title'], seen_titles):
+        if send:
+            passing.append(c)
+
+    now = time.time()
+    recent = [t for t, ts in seen_titles if now - ts < 24 * 3600]
+    dup_flags = _llm_dedup(passing, recent)
+
+    picked = []
+    for c, dup in zip(passing, dup_flags):
+        exact = any(_normalize_title(t) == _normalize_title(c['title']) for t, _ in seen_titles)
+        if dup is None:
+            dup = _is_similar_title(c['title'], seen_titles)
+        if dup or exact:
+            logger.info(f"중복 제외: {c['title'][:60]}")
             continue
         seen.add(get_article_id(c['url'], c['title']))
         seen_titles.append([c['title'], time.time()])

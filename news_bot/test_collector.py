@@ -72,6 +72,33 @@ def test_dedup():
                                    [["수협은행장 선임 4번째 불발…내달 재논의", T0]], T0 + 100 * HOUR)
 
 
+def test_breaking_dedup():
+    """같은 발표의 [속보] 여러 건은 하나만 나가야 한다 (2026-11-22 증안펀드 사례)."""
+    titles = ["[속보] 정부, 국내외 증시 급락에 '증시안정펀드' 가동 준비",
+              "[속보]금감원·거래소, 3개월간 불법 공매도 특별감시기간 운영",
+              "[속보] 검은 월요일 공포에… 정부 \"증안펀드 가동 준비작업 착수\"",
+              "[속보] 정부 '증안펀드' 즉시 가동 준비·공매도 3개월 특별감시·자사주…",
+              "[속보] 정부, 증권시장안정펀드 가동 준비 착수…상장기업 자기주식 매…"]
+    sent = []
+    for t in titles:
+        if not c._is_similar_title(t, sent, T0):
+            sent.append([t, T0])
+    # 규칙만으로는 줄임말(증안펀드=증권시장안정펀드)을 몰라 최대 2건까지 남을 수 있다. AI 판정이 나머지를 거른다.
+    assert len(sent) <= 2, [s[0] for s in sent]
+
+
+def test_stale_breaking():
+    """몇 시간 지나 들어온 [속보]는 후보에 넣지 않는다."""
+    import time
+    from email.utils import formatdate
+    cands = []
+    old = formatdate(time.time() - 5 * HOUR)
+    fresh = formatdate(time.time() - 10 * 60)
+    c._consider(cands, set(), [], "[속보] 금융위, 가계대출 규제 강화", 'https://example.com/a', '', '', old)
+    c._consider(cands, set(), [], "[속보] 금융위, 가계대출 규제 강화 발표", 'https://example.com/b', '', '', fresh)
+    assert [x['url'] for x in cands] == ['https://example.com/b']
+
+
 def test_feeds():
     urls = c._feed_urls()
     google = [u for u in urls if 'news.google.com/rss/search' in u]
@@ -90,6 +117,7 @@ def test_select_without_ai():
     picked = c._select(cands, seen, titles)
     assert [p['title'] for p in picked] == ["[단독] 농협금융, 순익 기여도 오류…증권은 높게, 은행은 낮게"]
     assert c.LLM_STATE['ok'] is False
+    assert c._llm_dedup([{'title': 'x'}], []) == [None]   # AI 없으면 규칙으로 넘긴다
 
 
 if __name__ == '__main__':
