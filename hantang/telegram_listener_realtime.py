@@ -2135,6 +2135,9 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
+    {"id": "20261127-group-contec", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "false"},
+     "why": "김태완 컨텍 정정 4분기 카드 + 정정된 아침 알림 단톡방 재발송"},
     {"id": "20261127-ktw-contec-relabel", "op": "relabel", "quarter": (26, 4),
      "person": "김태완", "old": "한화에어로스페이스", "new": "컨텍", "rec": "2026-11-16",
      "why": "'#매수 컨텍' 추천을 LLM이 012450(한화에어로스페이스)으로 지어냄 — 본인 확인"},
