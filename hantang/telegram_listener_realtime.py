@@ -594,7 +594,8 @@ def detect_tag(text: str):
 
 
 _LEAD_NOISE = {"매수", "매도", "추천", "재추천", "종목추천", "종목", "추천주",
-               "신규", "비중확대", "분할매수", "오늘", "매수추천"}
+               "신규", "비중확대", "분할매수", "오늘", "매수추천", "재매수", "추가매수",
+               "추매", "이번주", "금주"}
 _stock_cache = {}
 
 
@@ -965,7 +966,7 @@ def resolve_stock(text: str, holdings=None, history=None):
     """종목 확정. 반환: (시트표기 문자열 or None, 판정근거 문자열)
 
     후보 우선순위 — ① 보유 종목 직접 대조(매도 시) ② 원문 거래소표기 티커
-    ③ LLM 티커 ④ LLM 종목명(한/영) ⑤ 원문 괄호 티커 ⑥ 앞 5줄 토큰.
+    ③ 원문 괄호 티커 ④ 앞 5줄 토큰 ⑤ 이름 자리 단독 티커 ⑥ LLM 티커·종목명(원문 근거 확인).
     모든 후보는 네이버 조회로 검증하며, 실패 시 자동기록을 포기(fail-closed)한다.
     holdings를 주면 매도 대상을 보유 종목으로 좁힌다.
     """
@@ -994,17 +995,6 @@ def resolve_stock(text: str, holdings=None, history=None):
     elif len(exch) > 1:
         notes.append(f"원문 티커 후보 다수({','.join(exch)}) → 미사용")
 
-    info = resolve_stock_llm(text, holdings=holdings)
-    if info is None:
-        notes.append(f"LLM 실패({_llm_last_error or '원인 미상'})")
-    elif not info:
-        notes.append("LLM 판단: 종목 특정 불가")
-    else:
-        if info.get("ticker"):
-            cands.append(("code", info["ticker"].upper(), "LLM 티커"))
-        for k in ("name_ko", "name_en"):
-            if info.get(k):
-                cands.append(("name", info[k], f"LLM {k}"))
 
     # 괄호 티커는 '종목명(TICKER)' 관례가 통하는 '이름 구간'에서만 읽는다.
     # 사유 본문에서 괄호는 한글 용어의 영문 약어 자리로 훨씬 자주 쓰인다.
@@ -1018,8 +1008,29 @@ def resolve_stock(text: str, holdings=None, history=None):
     elif len(paren) > 1:
         notes.append(f"앞 2줄 괄호 티커 다수({','.join(paren)}) → 미사용")
 
-    for nm in _heuristic_names(text):
+    heur = _heuristic_names(text)
+    for nm in heur:
         cands.append(("name", nm, "원문 토큰"))
+    # 이름 자리에 해외 티커만 달랑 쓴 경우('#매수 SVIX', '#매수 QLD'). 이름 후보가 다 실패한 뒤에만
+    # 본다('SKT'는 이름 후보에서 SK텔레콤으로 먼저 잡혀야 한다 — 미국 SKT는 다른 회사).
+    first = next((h for h in heur if " " not in h), "")
+    if re.fullmatch(r"[A-Z]{2,5}", first) and not exch and not paren:
+        cands.append(("code", first, "원문 티커 토큰"))
+
+    # LLM은 맨 뒤 보조다. 원문 규칙으로 못 찾을 때만 쓰고, 그때도 원문 근거(_grounded)를 확인한다.
+    # 2026-11-16~17 LLM이 앞순위일 때 지어낸 코드 3건이 그대로 기록됐다
+    # (김태완 컨텍→한화에어로스페이스, 김동환 누리플렉스→에코캡, 이광훈 티엘비→오스코텍).
+    info = resolve_stock_llm(text, holdings=holdings)
+    if info is None:
+        notes.append(f"LLM 실패({_llm_last_error or '원인 미상'})")
+    elif not info:
+        notes.append("LLM 판단: 종목 특정 불가")
+    else:
+        if info.get("ticker"):
+            cands.append(("code", info["ticker"].upper(), "LLM 티커"))
+        for k in ("name_ko", "name_en"):
+            if info.get(k):
+                cands.append(("name", info[k], f"LLM {k}"))
 
     # 원문 토큰이 네이버에서 안 잡히는 경우를 대비한 마지막 보루.
     # 후보 목록 맨 뒤에 두지 않고 여기서 바로 확정하는 이유는, 시트에 이미
@@ -2124,9 +2135,16 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
-    {"id": "20261127-log-audit", "op": "dispatch", "workflow": "listener_log.yml",
-     "inputs": {"pattern": "\[매수-|\[매도-|OPS 종목명|OPS 매도|OPS 기록", "lines": "3000", "scan": "1000000"},
-     "why": "김태완 한화에어로스페이스 오기록 원인 + 매수·매도 기록 전수 대조용 전체 로그"},
+    {"id": "20261127-ktw-contec-relabel", "op": "relabel", "quarter": (26, 4),
+     "person": "김태완", "old": "한화에어로스페이스", "new": "컨텍", "rec": "2026-11-16",
+     "why": "'#매수 컨텍' 추천을 LLM이 012450(한화에어로스페이스)으로 지어냄 — 본인 확인"},
+    {"id": "20261127-daily-test-contec", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "김태완 컨텍 기준가·현재가 재계산 + 카드 확인(개인 텔레그램)"},
+    {"id": "20261127-log-contec", "op": "dispatch", "workflow": "listener_log.yml",
+     "inputs": {"pattern": "OPS", "lines": "6", "scan": "3000"},
+     "why": "정정 결과 확인"},
+    # 처리 완료: 20261127-log-audit (매수·매도 전수 대조용 로그)
     {"id": "20261127-alerts-group", "op": "dispatch", "workflow": "daily_report.yml",
      "inputs": {"test_mode": "false"},
      "why": "거래량 1.5배·없음 표시 아침 알림 단톡방 발송(카드 제외, 테스트 확인 후)"},
