@@ -281,13 +281,13 @@ def close_at(market: str, code: str, date: datetime.date):
 
 _last_close_cache: dict = {}
 
-def last_completed_session(market: str) -> datetime.date:
+def last_completed_session(market: str, now=None) -> datetime.date:
     """'마지막으로 장이 끝난' 날짜(달력 미적용 기준일). KST 실행 시각으로 판단.
       KR: 15:30 마감 → 16시 이후면 오늘, 아니면 어제
       US: 16:00 ET 마감(=익일 05~06시 KST) → 06시 이후면 어제, 아니면 그제
     데일리는 07:00 KST에 도는데, 이때 KR은 어제·US도 어제 세션이 마지막 완료분이다."""
     from datetime import timezone, timedelta
-    now = datetime.datetime.now(timezone(timedelta(hours=9)))
+    now = now or datetime.datetime.now(timezone(timedelta(hours=9)))
     if market == "KR":
         base = now.date() if now.hour >= 16 else now.date() - datetime.timedelta(days=1)
     else:
@@ -1515,7 +1515,7 @@ def _only_weekends_between(a: datetime.date, b: datetime.date) -> bool:
     return True
 
 
-VOL_ALERT_PCT = 150.0    # 전 거래일 대비 거래량 +150% 이상(= 2.5배 이상)
+VOL_ALERT_X = 1.5        # 전 거래일 대비 거래량 1.5배 이상(사용자 지시 11-27)
 VOL_MIN = 10000          # 당일 거래량이 이보다 적으면 제외(ETN처럼 하루 수십 주짜리는 비율이 무의미)
 _vol_cache: dict = {}
 
@@ -1563,8 +1563,9 @@ def daily_volumes(market: str, code: str) -> dict:
     return out
 
 
-def big_moves_text(rows, today: datetime.date) -> str:
-    """보유 종목 중 전 거래일 대비 ①주가 ±MOVE_ALERT_PCT% 이상 ②거래량 +VOL_ALERT_PCT% 이상.
+def big_moves_text(rows, today: datetime.date, now=None) -> str:
+    """보유 종목 중 전 거래일 대비 ①주가 ±MOVE_ALERT_PCT% 이상 ②거래량 VOL_ALERT_X배 이상.
+    해당 종목이 없어도 '없음'으로 보낸다 — 안 보내면 오류로 오해한다(사용자 지시 11-27).
     주가는 권리락을 보정한다. 거래량은 권리락(주식 수 변화)이 낀 날은 비교하지 않는다."""
     by_stock = {}
     for person, nm, _rd, _ret in rows:
@@ -1572,18 +1573,20 @@ def big_moves_text(rows, today: datetime.date) -> str:
         if person not in by_stock[nm]:
             by_stock[nm].append(person)
     moves, vols = [], []
+    checked = 0   # 새로 마감된 세션을 실제로 비교한 종목 수
     for nm, people in by_stock.items():
         try:
             mk, code = parse_stock(nm)
             if not mk:
                 continue
-            target = last_completed_session(mk)
+            target = last_completed_session(mk, now)
             p1, d1 = close_on_or_before(mk, code, target, with_date=True)
             if not p1 or not d1 or d1 != target or not _only_weekends_between(d1, today):
                 continue   # 그 세션 종가가 아직 없거나, 이미 전날 데일리가 알린 세션
             p0, d0 = close_on_or_before(mk, code, d1 - datetime.timedelta(days=1), with_date=True)
             if not p0 or not d0:
                 continue
+            checked += 1
             fa = adj_factor(mk, code, d0, d1)
             pct = (p1 / (p0 * fa) - 1) * 100
             if abs(pct) >= MOVE_ALERT_PCT:
@@ -1591,30 +1594,32 @@ def big_moves_text(rows, today: datetime.date) -> str:
             vv = daily_volumes(mk, code)
             v1, v0 = vv.get(d1), vv.get(d0)
             if v1 and v0 and v1 >= VOL_MIN and abs(fa - 1) < 1e-9:
-                vpct = (v1 / v0 - 1) * 100
-                if vpct >= VOL_ALERT_PCT:
-                    vols.append((vpct, nm, mk, d1, people, pct))
+                vx = v1 / v0
+                if vx >= VOL_ALERT_X:
+                    vols.append((vx, nm, mk, d1, people, pct))
         except Exception as e:
             print(f"    [급등락 계산 실패] {nm}: {e}")
-    if not moves and not vols:
-        return ""
-    lines = []
+    if not checked:
+        return ("⚡ 보유 종목 급등락·거래량 급증\n"
+                "오늘은 새로 마감된 거래일이 없어 비교할 게 없어요(휴장 등).")
+    lines = [f"⚡ 보유 종목 급등락 (전 거래일 대비 ±{MOVE_ALERT_PCT:g}% 이상)"]
     if moves:
         moves.sort(key=lambda x: -abs(x[0]))
-        lines.append(f"⚡ 보유 종목 급등락 (전 거래일 대비 ±{MOVE_ALERT_PCT:g}% 이상)")
         for pct, nm, mk, d1, people in moves:
             icon = "🔺" if pct > 0 else "🔻"
             mkt = "미국 " if mk == "US" else ""
             lines.append(f"{icon} {nm} {pct:+.1f}% ({mkt}{d1.month}/{d1.day}) — {', '.join(people)}")
+    else:
+        lines.append(f"없음 (보유 {checked}종목 확인)")
+    lines += ["", f"📊 거래량 급증 (전 거래일 대비 {VOL_ALERT_X:g}배 이상)"]
     if vols:
         vols.sort(key=lambda x: -x[0])
-        if lines:
-            lines.append("")
-        lines.append(f"📊 거래량 급증 (전 거래일 대비 +{VOL_ALERT_PCT:g}% 이상)")
-        for vpct, nm, mk, d1, people, pct in vols:
+        for vx, nm, mk, d1, people, pct in vols:
             mkt = "미국 " if mk == "US" else ""
-            lines.append(f"· {nm} 거래량 +{vpct:,.0f}% ({vpct / 100 + 1:.1f}배) · 주가 {pct:+.1f}% "
+            lines.append(f"· {nm} 거래량 {vx:.1f}배 · 주가 {pct:+.1f}% "
                          f"({mkt}{d1.month}/{d1.day}) — {', '.join(people)}")
+    else:
+        lines.append(f"없음 (보유 {checked}종목 확인)")
     return "\n".join(lines)
 
 
@@ -1622,11 +1627,17 @@ def morning_alerts(tabs, today: datetime.date):
     """카드 발송 뒤 단톡방에 자동매도 예고(월요일)·급등락·거래량 급증(매일)을 보낸다.
     같은 실행의 재시도(워크플로 3회 루프)에서 두 번 나가지 않게 표식 파일을 남긴다.
     재발송일(ops/card_only.json 날짜 = 오늘)엔 보내지 않는다."""
+    asof = None
     try:
         co = json.loads((BASE_DIR / "ops" / "card_only.json").read_text(encoding="utf-8"))
         if str(co.get("date")) == str(today):
-            print("  · 재발송일 — 아침 알림 생략")
-            return
+            if not co.get("alerts"):
+                print("  · 재발송일 — 아침 알림 생략")
+                return
+            # 알림만 다시 보내는 날: 아침 7시 데일리와 같은 세션을 비교한다(오후에 돌려도 당일 장 제외)
+            from datetime import timezone, timedelta
+            asof = datetime.datetime.combine(today, datetime.time(7, 0), timezone(timedelta(hours=9)))
+            print("  · 알림 재발송 모드 — 아침 7시 기준")
     except Exception:
         pass
     rows = []
@@ -1638,9 +1649,9 @@ def morning_alerts(tabs, today: datetime.date):
         except Exception as e:
             print(f"  [아침 알림] {ws.title} 읽기 실패: {e}")
     jobs = []
-    if today.weekday() == 0:
+    if today.weekday() == 0 and asof is None:
         jobs.append(("sellpreview", lambda: auto_sell_preview_text(rows, today)))
-    jobs.append(("bigmove", lambda: big_moves_text(rows, today)))
+    jobs.append(("bigmove", lambda: big_moves_text(rows, today, asof)))
     for kind, make in jobs:
         flag = BASE_DIR / f".alert_{kind}_{today}"
         if flag.exists():

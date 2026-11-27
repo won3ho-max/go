@@ -2124,6 +2124,9 @@ def sell_across(cache, member, stock, sell_date, sell_all=False, count=1, rec_hi
 #             다음 데일리가 매도일 종가로 확정). dry=True면 판정 결과만 운영자에게 보낸다.
 # 처리 후엔 목록에서 지워도 된다(남겨둬도 id 때문에 재실행 안 됨).
 STARTUP_OPS = [
+    {"id": "20261127-alerts-test", "op": "dispatch", "workflow": "daily_report.yml",
+     "inputs": {"test_mode": "true"},
+     "why": "거래량 1.5배·없음 표시 아침 알림 확인(개인 텔레그램, 카드 제외)"},
     {"id": "20261127-daily-test-volume", "op": "dispatch", "workflow": "daily_report.yml",
      "inputs": {"test_mode": "true"},
      "why": "거래량 급증 알림 추가 후 데일리 정상 동작 확인(개인 텔레그램)"},
