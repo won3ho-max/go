@@ -1516,6 +1516,7 @@ def _only_weekends_between(a: datetime.date, b: datetime.date) -> bool:
 
 
 VOL_ALERT_PCT = 150.0    # 전 거래일 대비 거래량 +150% 이상(= 2.5배 이상)
+VOL_MIN = 10000          # 당일 거래량이 이보다 적으면 제외(ETN처럼 하루 수십 주짜리는 비율이 무의미)
 _vol_cache: dict = {}
 
 
@@ -1528,16 +1529,19 @@ def daily_volumes(market: str, code: str) -> dict:
     out = {}
     try:
         if market == "KR":
-            r = requests.get(f"https://finance.daum.net/api/quote/A{code}/days",
-                             params={"symbolCode": f"A{code}", "page": 1, "perPage": 30,
-                                     "pagination": "true"},
-                             headers={"User-Agent": "Mozilla/5.0",
-                                      "Referer": f"https://finance.daum.net/quotes/A{code}"},
-                             timeout=8).json()
-            for row in r.get("data") or []:
-                v = row.get("accTradeVolume")
-                if v:
-                    out[datetime.date.fromisoformat(str(row["date"])[:10])] = float(v)
+            try:   # ETN 등 다음에 없는 종목은 JSON이 아닌 응답이 온다 → 네이버로 넘어간다
+                r = requests.get(f"https://finance.daum.net/api/quote/A{code}/days",
+                                 params={"symbolCode": f"A{code}", "page": 1, "perPage": 30,
+                                         "pagination": "true"},
+                                 headers={"User-Agent": "Mozilla/5.0",
+                                          "Referer": f"https://finance.daum.net/quotes/A{code}"},
+                                 timeout=8).json()
+                for row in r.get("data") or []:
+                    v = row.get("accTradeVolume")
+                    if v:
+                        out[datetime.date.fromisoformat(str(row["date"])[:10])] = float(v)
+            except Exception:
+                pass
             if not out:
                 rows = requests.get(f"https://m.stock.naver.com/api/stock/{code}/price",
                                     params={"pageSize": 30, "page": 1},
@@ -1586,7 +1590,7 @@ def big_moves_text(rows, today: datetime.date) -> str:
                 moves.append((pct, nm, mk, d1, people))
             vv = daily_volumes(mk, code)
             v1, v0 = vv.get(d1), vv.get(d0)
-            if v1 and v0 and abs(fa - 1) < 1e-9:
+            if v1 and v0 and v1 >= VOL_MIN and abs(fa - 1) < 1e-9:
                 vpct = (v1 / v0 - 1) * 100
                 if vpct >= VOL_ALERT_PCT:
                     vols.append((vpct, nm, mk, d1, people, pct))
