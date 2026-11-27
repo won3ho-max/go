@@ -1515,14 +1515,59 @@ def _only_weekends_between(a: datetime.date, b: datetime.date) -> bool:
     return True
 
 
+VOL_ALERT_PCT = 150.0    # 전 거래일 대비 거래량 +150% 이상(= 2.5배 이상)
+_vol_cache: dict = {}
+
+
+def daily_volumes(market: str, code: str) -> dict:
+    """{date: 거래량}. 국내는 다음 일봉 accTradeVolume(KRX 정규장, 종가와 같은 출처) →
+    없으면 네이버(NXT 포함 통합 거래량). 해외는 야후. 실패하면 {}."""
+    key = (market, code)
+    if key in _vol_cache:
+        return _vol_cache[key]
+    out = {}
+    try:
+        if market == "KR":
+            r = requests.get(f"https://finance.daum.net/api/quote/A{code}/days",
+                             params={"symbolCode": f"A{code}", "page": 1, "perPage": 30,
+                                     "pagination": "true"},
+                             headers={"User-Agent": "Mozilla/5.0",
+                                      "Referer": f"https://finance.daum.net/quotes/A{code}"},
+                             timeout=8).json()
+            for row in r.get("data") or []:
+                v = row.get("accTradeVolume")
+                if v:
+                    out[datetime.date.fromisoformat(str(row["date"])[:10])] = float(v)
+            if not out:
+                rows = requests.get(f"https://m.stock.naver.com/api/stock/{code}/price",
+                                    params={"pageSize": 30, "page": 1},
+                                    headers={"User-Agent": "Mozilla/5.0",
+                                             "Referer": "https://m.stock.naver.com/"},
+                                    timeout=8).json()
+                for x in rows if isinstance(rows, list) else []:
+                    v = str(x.get("accumulatedTradingVolume", "")).replace(",", "")
+                    if v and float(v) > 0:
+                        out[datetime.date.fromisoformat(str(x["localTradedAt"])[:10])] = float(v)
+        else:
+            h = yf.Ticker(code).history(period="1mo", prepost=False)
+            for ts, v in h["Volume"].dropna().items():
+                if v > 0:
+                    out[ts.date()] = float(v)
+    except Exception as e:
+        print(f"    [거래량 조회 실패] {code}: {e}")
+    _vol_cache[key] = out
+    return out
+
+
 def big_moves_text(rows, today: datetime.date) -> str:
-    """보유 종목 중 전 거래일 대비 ±MOVE_ALERT_PCT% 이상 움직인 것. 권리락은 보정한다."""
+    """보유 종목 중 전 거래일 대비 ①주가 ±MOVE_ALERT_PCT% 이상 ②거래량 +VOL_ALERT_PCT% 이상.
+    주가는 권리락을 보정한다. 거래량은 권리락(주식 수 변화)이 낀 날은 비교하지 않는다."""
     by_stock = {}
     for person, nm, _rd, _ret in rows:
         by_stock.setdefault(nm, [])
         if person not in by_stock[nm]:
             by_stock[nm].append(person)
-    hits = []
+    moves, vols = [], []
     for nm, people in by_stock.items():
         try:
             mk, code = parse_stock(nm)
@@ -1535,25 +1580,42 @@ def big_moves_text(rows, today: datetime.date) -> str:
             p0, d0 = close_on_or_before(mk, code, d1 - datetime.timedelta(days=1), with_date=True)
             if not p0 or not d0:
                 continue
-            base = p0 * adj_factor(mk, code, d0, d1)
-            pct = (p1 / base - 1) * 100
+            fa = adj_factor(mk, code, d0, d1)
+            pct = (p1 / (p0 * fa) - 1) * 100
             if abs(pct) >= MOVE_ALERT_PCT:
-                hits.append((pct, nm, mk, d1, people))
+                moves.append((pct, nm, mk, d1, people))
+            vv = daily_volumes(mk, code)
+            v1, v0 = vv.get(d1), vv.get(d0)
+            if v1 and v0 and abs(fa - 1) < 1e-9:
+                vpct = (v1 / v0 - 1) * 100
+                if vpct >= VOL_ALERT_PCT:
+                    vols.append((vpct, nm, mk, d1, people, pct))
         except Exception as e:
             print(f"    [급등락 계산 실패] {nm}: {e}")
-    if not hits:
+    if not moves and not vols:
         return ""
-    hits.sort(key=lambda x: -abs(x[0]))
-    lines = [f"⚡ 보유 종목 급등락 (전 거래일 대비 ±{MOVE_ALERT_PCT:g}% 이상)"]
-    for pct, nm, mk, d1, people in hits:
-        icon = "🔺" if pct > 0 else "🔻"
-        mkt = "미국 " if mk == "US" else ""
-        lines.append(f"{icon} {nm} {pct:+.1f}% ({mkt}{d1.month}/{d1.day}) — {', '.join(people)}")
+    lines = []
+    if moves:
+        moves.sort(key=lambda x: -abs(x[0]))
+        lines.append(f"⚡ 보유 종목 급등락 (전 거래일 대비 ±{MOVE_ALERT_PCT:g}% 이상)")
+        for pct, nm, mk, d1, people in moves:
+            icon = "🔺" if pct > 0 else "🔻"
+            mkt = "미국 " if mk == "US" else ""
+            lines.append(f"{icon} {nm} {pct:+.1f}% ({mkt}{d1.month}/{d1.day}) — {', '.join(people)}")
+    if vols:
+        vols.sort(key=lambda x: -x[0])
+        if lines:
+            lines.append("")
+        lines.append(f"📊 거래량 급증 (전 거래일 대비 +{VOL_ALERT_PCT:g}% 이상)")
+        for vpct, nm, mk, d1, people, pct in vols:
+            mkt = "미국 " if mk == "US" else ""
+            lines.append(f"· {nm} 거래량 +{vpct:,.0f}% ({vpct / 100 + 1:.1f}배) · 주가 {pct:+.1f}% "
+                         f"({mkt}{d1.month}/{d1.day}) — {', '.join(people)}")
     return "\n".join(lines)
 
 
 def morning_alerts(tabs, today: datetime.date):
-    """카드 발송 뒤 단톡방에 자동매도 예고(월요일)·급등락(매일)을 보낸다.
+    """카드 발송 뒤 단톡방에 자동매도 예고(월요일)·급등락·거래량 급증(매일)을 보낸다.
     같은 실행의 재시도(워크플로 3회 루프)에서 두 번 나가지 않게 표식 파일을 남긴다.
     재발송일(ops/card_only.json 날짜 = 오늘)엔 보내지 않는다."""
     try:
